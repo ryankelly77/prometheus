@@ -37,9 +37,12 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 ┌─────────────────────────────────────────────────────────────────┐
 │                      SUPABASE (Our DB)                          │
 ├─────────────────────────────────────────────────────────────────┤
-│  DailyMetrics          ← Source of truth                       │
-│  DailyCustomerMetrics  ← Guest data by day                     │
+│  DailyMetrics          ← Source of truth (sales, costs)        │
+│  DailyCustomerMetrics  ← Guest counts by day                   │
 │  DailyReviews          ← Review counts by day                  │
+│  Guest                 ← Individual guest CRM data (OpenTable) │
+│  GuestVisit            ← Individual visit records              │
+│  GuestTag              ← Guest tags/labels                     │
 │  MonthlyMetrics        ← Rolled up from daily (cached)         │
 │  HealthScoreHistory    ← Calculated scores                     │
 │  SyncLog               ← Audit trail                           │
@@ -49,22 +52,24 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │                      DASHBOARD                                  │
 │  - Charts pull from MonthlyMetrics (fast)                      │
 │  - Data tables pull from DailyMetrics                          │
+│  - Guest CRM table pulls from Guest + GuestVisit               │
 │  - Health scores from HealthScoreHistory                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Sync Schedules
 
-| Data Type | Source | Frequency | Time |
-|-----------|--------|-----------|------|
-| Sales | Toast | Nightly | 6:00 AM |
-| Labor Costs | Toast | Nightly | 6:00 AM |
-| Food Costs | R365 | Nightly | 6:00 AM |
-| Customer Counts | Toast/OpenTable | Nightly | 6:00 AM |
-| Guest Frequency | OpenTable | Daily | 6:00 AM |
-| Reviews | BrightLocal | Daily | 12:00 AM |
-| Website Visibility | SEMRush | Weekly | Sunday 12:00 AM |
-| PR Mentions | Manual/RSS | Weekly | Monday 6:00 AM |
+| Data Type | Source | Frequency | Time | Table |
+|-----------|--------|-----------|------|-------|
+| Sales | Toast | Nightly | 6:00 AM | DailyMetrics |
+| Labor Costs | Toast | Nightly | 6:00 AM | DailyMetrics |
+| Food Costs | R365 | Nightly | 6:00 AM | DailyMetrics |
+| Customer Counts | Toast | Nightly | 6:00 AM | DailyMetrics |
+| Guest Frequency | OpenTable | Nightly | 6:00 AM | DailyCustomerMetrics |
+| Guest CRM Data | OpenTable | Nightly | 6:00 AM | Guest, GuestVisit |
+| Reviews | BrightLocal | Daily | 12:00 AM | DailyReviews |
+| Website Visibility | SEMRush | Weekly | Sunday 12:00 AM | MonthlyMetrics |
+| PR Mentions | Manual/RSS | Weekly | Monday 6:00 AM | MonthlyMetrics |
 
 ---
 
@@ -186,6 +191,155 @@ model DailyReviews {
   
   @@unique([locationId, date])
 }
+```
+
+### Guest (OpenTable CRM Data)
+
+Guest-level data from OpenTable for customer relationship management and loyalty tracking.
+
+```prisma
+model Guest {
+  id                  String    @id @default(cuid())
+  locationId          String
+  
+  // OpenTable identifiers
+  openTableGuestId    String?   // OpenTable's guest ID
+  
+  // Guest info
+  firstName           String
+  lastName            String
+  email               String?
+  phone               String?
+  
+  // Current period metrics (updated on sync)
+  lastVisitDate       DateTime?
+  lastVisitTime       String?   // "7:30 PM"
+  visitsThisPeriod    Int       @default(0)  // Visits in selected date range
+  coversThisPeriod    Int       @default(0)  // Party size total this period
+  spendThisPeriod     Decimal   @default(0) @db.Decimal(12, 2)
+  
+  // Lifetime metrics
+  lifetimeVisits      Int       @default(0)
+  lifetimeCovers      Int       @default(0)
+  lifetimeSpend       Decimal   @default(0) @db.Decimal(12, 2)
+  
+  // Calculated
+  averagePartySize    Decimal?  @db.Decimal(4, 2)  // lifetimeCovers / lifetimeVisits
+  averageSpendPerVisit Decimal? @db.Decimal(10, 2) // lifetimeSpend / lifetimeVisits
+  
+  // First visit tracking
+  firstVisitDate      DateTime?
+  daysSinceFirstVisit Int?
+  
+  // Loyalty segment (calculated)
+  loyaltySegment      LoyaltySegment @default(NEW)
+  
+  // Sync metadata
+  syncedAt            DateTime
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  // Relations
+  location            Location @relation(fields: [locationId], references: [id])
+  tags                GuestTag[]
+  visits              GuestVisit[]
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  @@unique([locationId, openTableGuestId])
+  @@unique([locationId, email])
+  @@index([locationId, lastVisitDate])
+  @@index([locationId, loyaltySegment])
+  @@index([locationId, lifetimeVisits])
+}
+
+enum LoyaltySegment {
+  NEW           // First visit
+  RETURNING     // 2-9 visits
+  VIP           // 10+ visits
+  LAPSED        // No visit in 90+ days
+}
+```
+
+### GuestVisit (Individual Visit Records)
+
+```prisma
+model GuestVisit {
+  id              String   @id @default(cuid())
+  guestId         String
+  locationId      String
+  
+  // Visit details
+  visitDate       DateTime @db.Date
+  visitTime       String?  // "7:30 PM"
+  partySize       Int      @default(1)
+  spend           Decimal? @db.Decimal(10, 2)
+  
+  // Reservation details (if applicable)
+  reservationId   String?  // OpenTable reservation ID
+  tableNumber     String?
+  server          String?
+  
+  // Source
+  visitType       VisitType @default(RESERVATION)
+  
+  // Relations
+  guest           Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  location        Location @relation(fields: [locationId], references: [id])
+  
+  createdAt       DateTime @default(now())
+  
+  @@unique([guestId, visitDate, visitTime])
+  @@index([locationId, visitDate])
+  @@index([guestId, visitDate])
+}
+
+enum VisitType {
+  RESERVATION
+  WALK_IN
+  PRIVATE_EVENT
+  CATERING
+}
+```
+
+### GuestTag
+
+```prisma
+model GuestTag {
+  id          String   @id @default(cuid())
+  locationId  String
+  
+  name        String   // 'VIP', 'Regular', 'Birthday', 'Anniversary', 'Food Allergy', etc.
+  color       String?  // Hex color for UI display
+  
+  // System vs custom
+  isSystem    Boolean  @default(false)  // System tags can't be deleted
+  
+  // Relations
+  guests      Guest[]
+  location    Location @relation(fields: [locationId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  
+  @@unique([locationId, name])
+}
+```
+
+### Default Guest Tags
+
+```typescript
+const defaultGuestTags = [
+  { name: 'VIP', color: '#8b5cf6', isSystem: true },
+  { name: 'Regular', color: '#3b82f6', isSystem: true },
+  { name: 'Birthday', color: '#ec4899', isSystem: false },
+  { name: 'Anniversary', color: '#f43f5e', isSystem: false },
+  { name: 'Food Allergy', color: '#ef4444', isSystem: false },
+  { name: 'Vegetarian', color: '#22c55e', isSystem: false },
+  { name: 'Gluten-Free', color: '#eab308', isSystem: false },
+  { name: 'High Spender', color: '#f59e0b', isSystem: true },
+  { name: 'Influencer', color: '#06b6d4', isSystem: false },
+  { name: 'Press/Media', color: '#6366f1', isSystem: false },
+];
 ```
 
 ### MonthlyMetrics (Rolled Up Cache)
@@ -427,6 +581,233 @@ Or as a tab on each page:
 | 2 Star | BrightLocal |
 | 1 Star | BrightLocal |
 | Average | Calculated |
+
+---
+
+## Guest Data Table (OpenTable CRM)
+
+### Overview
+
+Unlike other data tables which show daily aggregates, the Guest table shows individual guest records from OpenTable. This is CRM-style data for customer relationship management.
+
+### Page Location
+
+```
+/dashboard/customers/data
+```
+
+Or as a tab on the Customers page:
+```
+/dashboard/customers?view=charts  (default)
+/dashboard/customers?view=guests
+```
+
+### Guest Data Table UI
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Guest Data                                                                                                      │
+│ Last synced: Jan 25, 2025 6:00 AM from OpenTable                                      [↻ Sync Now] [Export CSV] │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 🔍 [Search guests...        ]   [Segment: All ▼]   [Tags: All ▼]   [Period: Last 30 Days ▼]                    │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Guest           │ Last Visit  │ Time    │ Visits │ Covers │ Spend    │ Lifetime │ LT Covers │ LT Spend  │ Tags │
+│                 │             │         │ (period)│(period)│ (period) │ Visits   │           │           │      │
+│─────────────────┼─────────────┼─────────┼────────┼────────┼──────────┼──────────┼───────────┼───────────┼──────│
+│ Sarah Johnson   │ Jan 24      │ 7:30 PM │ 3      │ 8      │ $486     │ 47       │ 142       │ $8,234    │ VIP  │
+│ Michael Chen    │ Jan 23      │ 6:00 PM │ 2      │ 4      │ $312     │ 23       │ 58        │ $4,120    │ Reg  │
+│ Emily Davis     │ Jan 22      │ 8:15 PM │ 1      │ 2      │ $156     │ 1        │ 2         │ $156      │ New  │
+│ Robert Wilson   │ Jan 20      │ 7:00 PM │ 2      │ 6      │ $445     │ 15       │ 41        │ $2,890    │ 🎂   │
+│ Jennifer Martinez│ Jan 18     │ 6:30 PM │ 1      │ 4      │ $289     │ 8        │ 24        │ $1,456    │      │
+│ David Thompson  │ Jan 15      │ 7:45 PM │ 1      │ 2      │ $178     │ 31       │ 78        │ $5,670    │ VIP  │
+│ ...             │             │         │        │        │          │          │           │           │      │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Showing 1-25 of 1,247 guests                                              [← Prev]  Page 1 of 50  [Next →]     │
+│                                                                           [25 ▼] per page                       │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Column Definitions
+
+| Column | Description | Sortable |
+|--------|-------------|----------|
+| Guest | First name + Last name | Yes |
+| Last Visit | Most recent visit date | Yes (default desc) |
+| Time | Time of last visit | No |
+| Visits (period) | Number of visits in selected period | Yes |
+| Covers (period) | Total party size in selected period | Yes |
+| Spend (period) | Total spend in selected period | Yes |
+| Lifetime Visits | All-time visit count | Yes |
+| LT Covers | All-time total covers | Yes |
+| LT Spend | All-time total spend | Yes |
+| Tags | Guest tags (displayed as badges) | Filter only |
+
+### Filters
+
+**Search:**
+- Search by guest name (first or last)
+- Search by email
+- Search by phone
+
+**Segment Filter:**
+- All Guests
+- New (1 visit)
+- Returning (2-9 visits)
+- VIP (10+ visits)
+- Lapsed (no visit in 90+ days)
+
+**Tag Filter:**
+- Multi-select dropdown
+- Shows all tags with guest counts
+- "VIP (23)", "Regular (156)", "Birthday (12)"
+
+**Period Filter:**
+- Last 7 Days
+- Last 30 Days (default)
+- Last 90 Days
+- This Month
+- Last Month
+- This Year
+- Custom Date Range
+
+### Row Click → Guest Detail Drawer
+
+Clicking a row opens a slide-out drawer with full guest details:
+
+```
+┌───────────────────────────────────────────────────┐
+│ ← Back                           [Edit] [Archive] │
+├───────────────────────────────────────────────────┤
+│                                                   │
+│  👤 Sarah Johnson                                 │
+│  sarah.johnson@email.com                          │
+│  (210) 555-0123                                   │
+│                                                   │
+│  ┌─────────────────────────────────────────────┐  │
+│  │ VIP │ Regular │ Birthday (Mar 15) │         │  │
+│  └─────────────────────────────────────────────┘  │
+│  [+ Add Tag]                                      │
+│                                                   │
+├───────────────────────────────────────────────────┤
+│  LIFETIME STATS                                   │
+│  ┌────────────┬────────────┬────────────┐        │
+│  │ 47 Visits  │ 142 Covers │ $8,234     │        │
+│  │            │ Avg: 3.0   │ Avg: $175  │        │
+│  └────────────┴────────────┴────────────┘        │
+│                                                   │
+│  First Visit: Mar 12, 2021 (1,415 days ago)      │
+│                                                   │
+├───────────────────────────────────────────────────┤
+│  VISIT HISTORY                                    │
+│  ┌─────────────────────────────────────────────┐  │
+│  │ Jan 24, 2025 │ 7:30 PM │ 3 ppl │ $156      │  │
+│  │ Jan 18, 2025 │ 6:45 PM │ 2 ppl │ $178      │  │
+│  │ Jan 10, 2025 │ 7:00 PM │ 3 ppl │ $152      │  │
+│  │ Dec 28, 2024 │ 8:00 PM │ 4 ppl │ $234      │  │
+│  │ Dec 15, 2024 │ 7:15 PM │ 2 ppl │ $145      │  │
+│  │ ... show more                               │  │
+│  └─────────────────────────────────────────────┘  │
+│                                                   │
+├───────────────────────────────────────────────────┤
+│  NOTES                                            │
+│  ┌─────────────────────────────────────────────┐  │
+│  │ Prefers booth seating. Allergic to shellfish│  │
+│  │ Always orders the ribeye medium-rare.       │  │
+│  └─────────────────────────────────────────────┘  │
+│  [Edit Notes]                                     │
+│                                                   │
+└───────────────────────────────────────────────────┘
+```
+
+### Guest Sync Logic
+
+**Sync Frequency:** Daily at 6:00 AM
+
+**Sync Process:**
+1. Fetch guest list from OpenTable API
+2. For each guest:
+   - Match by `openTableGuestId` or `email`
+   - If new, create Guest record
+   - If existing, update metrics
+3. Fetch recent visits
+4. Update `visitsThisPeriod`, `coversThisPeriod`, `spendThisPeriod`
+5. Recalculate `loyaltySegment` based on `lifetimeVisits`
+
+**Loyalty Segment Calculation:**
+```typescript
+function calculateLoyaltySegment(guest: Guest): LoyaltySegment {
+  const daysSinceLastVisit = differenceInDays(new Date(), guest.lastVisitDate);
+  
+  if (daysSinceLastVisit > 90) return 'LAPSED';
+  if (guest.lifetimeVisits >= 10) return 'VIP';
+  if (guest.lifetimeVisits >= 2) return 'RETURNING';
+  return 'NEW';
+}
+```
+
+### Guest API Endpoints
+
+```typescript
+// Get paginated guest list
+GET /api/locations/{id}/guests
+  ?page=1
+  &pageSize=25
+  &search=sarah
+  &segment=VIP
+  &tags=vip,birthday
+  &periodStart=2025-01-01
+  &periodEnd=2025-01-31
+  &sortBy=lastVisitDate
+  &sortOrder=desc
+
+// Get single guest with visit history
+GET /api/locations/{id}/guests/{guestId}
+
+// Update guest (tags, notes)
+PATCH /api/locations/{id}/guests/{guestId}
+{
+  tags: ['vip', 'birthday'],
+  notes: 'Prefers booth seating'
+}
+
+// Archive guest (soft delete)
+POST /api/locations/{id}/guests/{guestId}/archive
+
+// Get guest tags for location
+GET /api/locations/{id}/guest-tags
+
+// Create custom tag
+POST /api/locations/{id}/guest-tags
+{
+  name: 'Wine Club',
+  color: '#8b5cf6'
+}
+
+// Trigger guest sync
+POST /api/sync/guests
+{
+  locationId: string,
+  force?: boolean
+}
+```
+
+### Guest Data Export
+
+Export to CSV includes:
+- Full name
+- Email
+- Phone
+- Last Visit Date
+- Last Visit Time
+- Visits (period)
+- Covers (period)
+- Spend (period)
+- Lifetime Visits
+- Lifetime Covers
+- Lifetime Spend
+- Tags (comma-separated)
+- Loyalty Segment
+- First Visit Date
 
 ---
 
