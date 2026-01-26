@@ -239,9 +239,15 @@ export default function ReviewsPage() {
             <CardContent className="flex flex-col items-center justify-center py-16">
               <Table2 className="h-12 w-12 text-muted-foreground/50 mb-4" />
               <h3 className="text-lg font-semibold mb-2">Review Data Table</h3>
-              <p className="text-muted-foreground text-center max-w-md">
-                Detailed review data with search, filtering, and export capabilities coming soon.
+              <p className="text-muted-foreground text-center max-w-md mb-4">
+                View all reviews with search, filtering, and response management.
               </p>
+              <a
+                href="/dashboard/reviews/data"
+                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                View Data Table
+              </a>
             </CardContent>
           </Card>
         </TabsContent>

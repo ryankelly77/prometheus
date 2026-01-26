@@ -262,9 +262,15 @@ export default function SalesPage() {
             <CardContent className="flex flex-col items-center justify-center py-16">
               <Table2 className="h-12 w-12 text-muted-foreground/50 mb-4" />
               <h3 className="text-lg font-semibold mb-2">Sales Data Table</h3>
-              <p className="text-muted-foreground text-center max-w-md">
-                Detailed sales data with daily breakdowns, filtering, and export capabilities coming soon.
+              <p className="text-muted-foreground text-center max-w-md mb-4">
+                View daily sales data with breakdowns, sync status, and export capabilities.
               </p>
+              <a
+                href="/dashboard/sales/data"
+                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                View Data Table
+              </a>
             </CardContent>
           </Card>
         </TabsContent>
