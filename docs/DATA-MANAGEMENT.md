@@ -54,6 +54,12 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  AIVisibilitySnapshot  ← Monthly AI visibility (Pro plan)      │
 │  PromptTracking        ← AI prompt results (Pro plan)          │
 │  VisibilityConfig      ← SEMrush settings per location         │
+│  SocialMediaConfig     ← Social provider settings              │
+│  SocialProfile         ← Connected social accounts             │
+│  SocialSnapshot        ← Monthly social metrics                │
+│  SocialPost            ← Individual post performance           │
+│  SocialHashtag         ← Hashtag tracking                      │
+│  SocialCompetitor      ← Competitor social tracking            │
 │  MediaMention          ← Individual press coverage             │
 │  MediaMentionSnapshot  ← Monthly PR aggregates                 │
 │  Award                 ← Awards and accolades                  │
@@ -80,6 +86,8 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  - NAP/GBP health pulls from NAPAudit, GBPAuditSnapshot        │
 │  - AI Visibility (Pro) pulls from AIVisibilitySnapshot         │
 │  - Prompt table (Pro) pulls from PromptTracking                │
+│  - Social charts pull from SocialSnapshot                      │
+│  - Posts table pulls from SocialPost                           │
 │  - PR charts pull from MediaMentionSnapshot                    │
 │  - Mentions table pulls from MediaMention                      │
 │  - Awards section pulls from Award                             │
@@ -104,6 +112,7 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 | NAP Audit | BrightLocal | Monthly | 1st of month | NAPAudit |
 | GBP Audit | BrightLocal | Monthly | 1st of month | GBPAuditSnapshot |
 | AI Visibility (Pro) | SEMrush | Weekly | Sunday 6:00 AM | AIVisibilitySnapshot, PromptTracking |
+| Social Media | Sprout/Metricool/etc. | Daily | 7:00 AM | SocialSnapshot, SocialPost |
 | PR Mentions | Manual/CSV | On-demand | N/A | MediaMention, MediaMentionSnapshot |
 | PR Mentions (Future) | Cision/Meltwater | Daily | 8:00 AM | MediaMention, MediaMentionSnapshot |
 | Awards | Manual | On-demand | N/A | Award |
@@ -1319,6 +1328,450 @@ const aiPlatformConfig = {
     color: '#6B7280',
     icon: 'globe',
     bgColor: '#F3F4F6',
+  },
+};
+```
+
+### SocialMediaConfig (Provider Settings per Location)
+
+```prisma
+model SocialMediaConfig {
+  id              String   @id @default(cuid())
+  locationId      String   @unique
+  
+  // Provider connection
+  provider            SocialProvider?  // Which tool they use
+  providerAccountId   String?          // Account ID in provider system
+  
+  // API credentials (encrypted)
+  apiKey              String?          // Provider API key
+  apiSecret           String?          // Provider API secret
+  accessToken         String?          // OAuth access token
+  refreshToken        String?          // OAuth refresh token
+  tokenExpiresAt      DateTime?        // Token expiration
+  
+  // Connected profiles (stored in SocialProfile)
+  
+  // Sync settings
+  lastSyncAt          DateTime?
+  syncFrequency       SyncFrequency    @default(DAILY)
+  
+  // Feature flags
+  trackCompetitors    Boolean          @default(false)
+  trackHashtags       Boolean          @default(false)
+  
+  location            Location         @relation(fields: [locationId], references: [id])
+  profiles            SocialProfile[]
+  
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+}
+
+enum SocialProvider {
+  SPROUT_SOCIAL
+  METRICOOL
+  HOOTSUITE
+  BUFFER
+  LATER
+  MANUAL           // Manual entry / CSV import
+}
+```
+
+### SocialProfile (Connected Social Accounts)
+
+Individual social media accounts connected via the provider.
+
+```prisma
+model SocialProfile {
+  id              String   @id @default(cuid())
+  locationId      String
+  configId        String
+  
+  // Platform info
+  platform            SocialPlatform
+  platformAccountId   String           // Account ID on the platform
+  handle              String           // @username
+  displayName         String?          // Display name
+  profileUrl          String?          // Link to profile
+  profileImageUrl     String?          // Avatar
+  
+  // Account type
+  accountType         String?          // "business", "creator", "personal"
+  isVerified          Boolean          @default(false)
+  
+  // Current follower count (updated on each sync)
+  followerCount       Int              @default(0)
+  followingCount      Int?
+  postCount           Int?
+  
+  // Tracking
+  trackingSince       DateTime         @default(now())
+  isActive            Boolean          @default(true)
+  
+  // Provider reference
+  providerProfileId   String?          // ID in Sprout/Metricool/etc.
+  
+  config              SocialMediaConfig @relation(fields: [configId], references: [id])
+  location            Location         @relation(fields: [locationId], references: [id])
+  snapshots           SocialSnapshot[]
+  posts               SocialPost[]
+  
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  
+  @@unique([locationId, platform, platformAccountId])
+  @@index([locationId, platform])
+}
+
+enum SocialPlatform {
+  INSTAGRAM
+  FACEBOOK
+  TIKTOK
+  TWITTER           // X
+  LINKEDIN
+  YOUTUBE
+  GOOGLE_BUSINESS   // GBP Posts
+  PINTEREST
+  OTHER
+}
+```
+
+### SocialSnapshot (Monthly Social Metrics)
+
+Monthly aggregated metrics per platform.
+
+```prisma
+model SocialSnapshot {
+  id              String   @id @default(cuid())
+  profileId       String
+  locationId      String
+  month           String   // 'YYYY-MM' format
+  platform        SocialPlatform
+  
+  // Audience metrics
+  followerCount       Int          @default(0)
+  followerChange      Int?         // Net change from prior month
+  followerGrowthRate  Decimal?     @db.Decimal(5, 2)  // % growth
+  followingCount      Int?
+  
+  // Content metrics
+  totalPosts          Int          @default(0)
+  postsChange         Int?         // vs prior month
+  
+  // Engagement metrics (totals for the month)
+  totalLikes          Int          @default(0)
+  totalComments       Int          @default(0)
+  totalShares         Int          @default(0)
+  totalSaves          Int?         // Instagram
+  totalViews          Int?         // Video views (Reels, TikTok)
+  
+  // Calculated engagement
+  engagementRate      Decimal?     @db.Decimal(5, 2)  // (engagements / reach) * 100
+  avgEngagementPerPost Decimal?    @db.Decimal(10, 2)
+  
+  // Reach & Impressions
+  totalReach          Int?         // Unique accounts reached
+  totalImpressions    Int?         // Total times content shown
+  reachChange         Decimal?     @db.Decimal(5, 2)  // % change
+  
+  // Content breakdown
+  feedPosts           Int          @default(0)
+  stories             Int          @default(0)
+  reels               Int          @default(0)
+  videos              Int          @default(0)
+  
+  // Platform-specific metrics (JSON for flexibility)
+  platformMetrics     Json?        // { profileVisits, websiteClicks, etc. }
+  
+  // Best performing content
+  topPostId           String?      // Reference to best post
+  topPostEngagement   Int?
+  
+  // Competitor comparison (if enabled)
+  competitorData      Json?        // [{ handle, followers, engagementRate }, ...]
+  
+  // Targets
+  followerTarget      Int?
+  engagementTarget    Decimal?     @db.Decimal(5, 2)
+  
+  // Sync metadata
+  syncedAt            DateTime
+  syncStatus          SyncStatus   @default(SUCCESS)
+  
+  profile             SocialProfile @relation(fields: [profileId], references: [id])
+  location            Location     @relation(fields: [locationId], references: [id])
+  
+  @@unique([profileId, month])
+  @@index([locationId, month])
+  @@index([locationId, platform, month])
+}
+```
+
+### SocialPost (Individual Post Performance)
+
+Track individual post performance for content analysis.
+
+```prisma
+model SocialPost {
+  id              String   @id @default(cuid())
+  profileId       String
+  locationId      String
+  platform        SocialPlatform
+  
+  // Post identification
+  platformPostId      String           // Post ID on the platform
+  postUrl             String?          // Direct link to post
+  
+  // Content
+  postType            PostType
+  caption             String?          @db.Text
+  hashtags            String[]         // Extracted hashtags
+  mentions            String[]         // @mentions
+  
+  // Media
+  mediaType           MediaContentType?
+  mediaUrls           String[]         // Image/video URLs
+  thumbnailUrl        String?
+  
+  // Timing
+  publishedAt         DateTime
+  
+  // Engagement metrics
+  likes               Int              @default(0)
+  comments            Int              @default(0)
+  shares              Int              @default(0)
+  saves               Int?             // Instagram
+  views               Int?             // Video views
+  
+  // Reach
+  reach               Int?
+  impressions         Int?
+  
+  // Calculated
+  engagementRate      Decimal?         @db.Decimal(5, 2)
+  engagementTotal     Int              @default(0)  // likes + comments + shares + saves
+  
+  // Platform-specific metrics
+  platformMetrics     Json?            // { plays, replays, exitRate, etc. }
+  
+  // Performance flags
+  isTopPerformer      Boolean          @default(false)  // Top 10% engagement
+  isBoosted           Boolean          @default(false)  // Paid promotion
+  
+  // Sync metadata
+  lastSyncedAt        DateTime
+  syncStatus          SyncStatus       @default(SUCCESS)
+  
+  profile             SocialProfile    @relation(fields: [profileId], references: [id])
+  location            Location         @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  
+  @@unique([profileId, platformPostId])
+  @@index([locationId, platform])
+  @@index([locationId, publishedAt])
+  @@index([profileId, publishedAt])
+}
+
+enum PostType {
+  FEED_POST       // Regular feed post
+  STORY           // Ephemeral story
+  REEL            // Instagram Reel
+  VIDEO           // TikTok, YouTube, FB Video
+  CAROUSEL        // Multi-image post
+  LIVE            // Live video
+  TEXT            // Text-only (Twitter/X)
+  LINK            // Link share
+  EVENT           // Facebook event
+  POLL            // Poll/quiz
+  OTHER
+}
+
+enum MediaContentType {
+  IMAGE
+  VIDEO
+  CAROUSEL
+  GIF
+  AUDIO
+  DOCUMENT
+  NONE
+}
+```
+
+### SocialHashtag (Hashtag Performance Tracking)
+
+Track hashtag performance for content strategy.
+
+```prisma
+model SocialHashtag {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  hashtag             String           // Without # symbol
+  platform            SocialPlatform?  // Null = all platforms
+  
+  // Usage metrics
+  timesUsed           Int              @default(0)
+  lastUsedAt          DateTime?
+  
+  // Performance when used
+  avgEngagementRate   Decimal?         @db.Decimal(5, 2)
+  avgReach            Int?
+  totalEngagement     Int              @default(0)
+  
+  // Categorization
+  category            String?          // "branded", "location", "food", "event"
+  isOwned             Boolean          @default(false)  // Brand hashtag
+  
+  // Tracking
+  isTracked           Boolean          @default(true)
+  
+  location            Location         @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  
+  @@unique([locationId, hashtag, platform])
+  @@index([locationId, avgEngagementRate])
+}
+```
+
+### SocialCompetitor (Competitor Tracking)
+
+Track competitor social performance.
+
+```prisma
+model SocialCompetitor {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Competitor info
+  name                String           // Business name
+  platform            SocialPlatform
+  handle              String           // @username
+  profileUrl          String?
+  
+  // Current metrics (updated on sync)
+  followerCount       Int              @default(0)
+  followingCount      Int?
+  postCount           Int?
+  
+  // Recent performance
+  avgEngagementRate   Decimal?         @db.Decimal(5, 2)
+  postsLast30Days     Int?
+  avgLikesPerPost     Int?
+  avgCommentsPerPost  Int?
+  
+  // Tracking
+  isActive            Boolean          @default(true)
+  trackingSince       DateTime         @default(now())
+  lastSyncedAt        DateTime?
+  
+  // Historical data (JSON for simplicity)
+  monthlyHistory      Json?            // [{ month, followers, engagementRate }, ...]
+  
+  location            Location         @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  
+  @@unique([locationId, platform, handle])
+  @@index([locationId, platform])
+}
+```
+
+### Social Platform Display Config
+
+```typescript
+const socialPlatformConfig = {
+  INSTAGRAM: {
+    name: 'Instagram',
+    color: '#E4405F',
+    bgColor: '#FDF2F4',
+    icon: 'instagram',
+    gradient: 'linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888)',
+  },
+  FACEBOOK: {
+    name: 'Facebook',
+    color: '#1877F2',
+    bgColor: '#EBF3FE',
+    icon: 'facebook',
+  },
+  TIKTOK: {
+    name: 'TikTok',
+    color: '#000000',
+    bgColor: '#F5F5F5',
+    icon: 'music',  // or custom TikTok icon
+    accentColor: '#00F2EA',
+  },
+  TWITTER: {
+    name: 'X',
+    color: '#000000',
+    bgColor: '#F5F5F5',
+    icon: 'twitter',
+  },
+  LINKEDIN: {
+    name: 'LinkedIn',
+    color: '#0A66C2',
+    bgColor: '#E8F1F8',
+    icon: 'linkedin',
+  },
+  YOUTUBE: {
+    name: 'YouTube',
+    color: '#FF0000',
+    bgColor: '#FFEBEE',
+    icon: 'youtube',
+  },
+  GOOGLE_BUSINESS: {
+    name: 'Google Business',
+    color: '#4285F4',
+    bgColor: '#E8F0FE',
+    icon: 'map-pin',
+  },
+  PINTEREST: {
+    name: 'Pinterest',
+    color: '#E60023',
+    bgColor: '#FDEAED',
+    icon: 'pin',
+  },
+};
+
+const socialProviderConfig = {
+  SPROUT_SOCIAL: {
+    name: 'Sprout Social',
+    color: '#59CB59',
+    icon: 'sprout',
+    website: 'https://sproutsocial.com',
+  },
+  METRICOOL: {
+    name: 'Metricool',
+    color: '#00C4B4',
+    icon: 'bar-chart',
+    website: 'https://metricool.com',
+  },
+  HOOTSUITE: {
+    name: 'Hootsuite',
+    color: '#143059',
+    icon: 'owl',
+    website: 'https://hootsuite.com',
+  },
+  BUFFER: {
+    name: 'Buffer',
+    color: '#231F20',
+    icon: 'layers',
+    website: 'https://buffer.com',
+  },
+  LATER: {
+    name: 'Later',
+    color: '#F5A5B8',
+    icon: 'clock',
+    website: 'https://later.com',
+  },
+  MANUAL: {
+    name: 'Manual Entry',
+    color: '#6B7280',
+    icon: 'edit',
   },
 };
 ```
@@ -3372,6 +3825,618 @@ GET /api/locations/{id}/maps-visibility/competitors?keyword=best+brunch
 - Phone Match
 - Issues
 - Listing URL
+
+---
+
+## Social Media Page
+
+### Overview
+
+The Social Media page shows performance across connected social platforms (Instagram, Facebook, TikTok, etc.). Data is pulled from whichever social management tool the restaurant uses (Sprout Social, Metricool, Hootsuite, etc.) via their APIs.
+
+### Page Location
+
+```
+/dashboard/social
+```
+
+### Page Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Social Media                                                  [Month: January 2025 ▼]   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─── CONNECTED ACCOUNTS ─────────────────────────────────────────────────────────┐    │
+│  │  [IG] @southerleighpearl  [FB] Southerleigh  [TT] @southerleigh  [+ Connect]   │    │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── SUMMARY CARDS ───────────────────────────────────────────────────────────────┐   │
+│  │ [Total Followers] [Follower Growth] [Engagement Rate] [Total Reach]             │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── CHARTS ──────────────────────────────────────────────────────────────────────┐   │
+│  │ [Follower Growth Trend]  [Engagement by Platform]  [Content Performance]        │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── TOP POSTS ───────────────────────────────────────────────────────────────────┐   │
+│  │ [Grid of top performing posts with thumbnails and metrics]                      │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── POST PERFORMANCE TABLE ──────────────────────────────────────────────────────┐   │
+│  │ [Full post listing with filters and sorting]                                    │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### No Provider Connected State
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Social Media                                                                            │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                                                                                   │  │
+│  │                        📱 Connect Your Social Media                              │  │
+│  │                                                                                   │  │
+│  │  Track your restaurant's social media performance across all platforms           │  │
+│  │  in one dashboard.                                                               │  │
+│  │                                                                                   │  │
+│  │  Connect your social management tool:                                            │  │
+│  │                                                                                   │  │
+│  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐                     │  │
+│  │  │  🌱 Sprout     │  │  📊 Metricool  │  │  🦉 Hootsuite  │                     │  │
+│  │  │    Social      │  │                │  │                │                     │  │
+│  │  │  [Connect]     │  │   [Connect]    │  │   [Connect]    │                     │  │
+│  │  └────────────────┘  └────────────────┘  └────────────────┘                     │  │
+│  │                                                                                   │  │
+│  │  ┌────────────────┐  ┌────────────────┐                                         │  │
+│  │  │  📦 Buffer     │  │  ⏰ Later      │                                         │  │
+│  │  │                │  │                │                                         │  │
+│  │  │  [Connect]     │  │   [Connect]    │                                         │  │
+│  │  └────────────────┘  └────────────────┘                                         │  │
+│  │                                                                                   │  │
+│  │  Don't use a social tool? [Enter metrics manually]                              │  │
+│  │                                                                                   │  │
+│  └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Connected Accounts Bar
+
+Shows which social profiles are connected and allows quick switching.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Connected via Sprout Social                                    [⚙ Manage Connection]   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐   │
+│  │ 📸 Instagram     │  │ 📘 Facebook      │  │ 🎵 TikTok        │  │               │   │
+│  │ @southerleigh    │  │ Southerleigh     │  │ @southerleigh    │  │  + Connect    │   │
+│  │ 12.4K followers  │  │ 8.2K followers   │  │ 5.1K followers   │  │    Account    │   │
+│  │ ✓ Active         │  │ ✓ Active         │  │ ✓ Active         │  │               │   │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘  └───────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Summary Cards
+
+```
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ Total Followers  │  │ Follower Growth  │  │ Engagement Rate  │  │ Total Reach      │
+│    25,700        │  │    +1,240        │  │     4.8%         │  │    142.5K        │
+│ across 3 accounts│  │   ▲ +5.1% vs LM  │  │   ▲ +0.6% vs LM  │  │   ▲ +18% vs LM   │
+│                  │  │                  │  │   Target: 5.0%   │  │                  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘
+```
+
+Card definitions:
+- **Total Followers:** Sum across all connected platforms
+- **Follower Growth:** Net new followers this period
+- **Engagement Rate:** (Engagements / Reach) × 100
+- **Total Reach:** Unique accounts reached
+
+---
+
+### Platform Breakdown Cards (Below Summary)
+
+Show per-platform snapshot:
+
+```
+┌────────────────────────────────────┐  ┌────────────────────────────────────┐
+│ 📸 Instagram           @southerleigh│  │ 📘 Facebook           Southerleigh│
+├────────────────────────────────────┤  ├────────────────────────────────────┤
+│ Followers    12,400    ▲ +420      │  │ Followers    8,200     ▲ +180      │
+│ Posts             8                │  │ Posts             5                │
+│ Reels             4                │  │ Videos            2                │
+│ Engagement    5.2%     ▲ +0.8%     │  │ Engagement    3.1%     ▼ -0.2%     │
+│ Reach        89.2K     ▲ +22%      │  │ Reach        32.1K     ▲ +8%       │
+└────────────────────────────────────┘  └────────────────────────────────────┘
+
+┌────────────────────────────────────┐
+│ 🎵 TikTok             @southerleigh│
+├────────────────────────────────────┤
+│ Followers    5,100     ▲ +640      │
+│ Videos            6                │
+│ Engagement    8.4%     ▲ +1.2%     │
+│ Views       245.8K     ▲ +45%      │
+└────────────────────────────────────┘
+```
+
+---
+
+### Charts
+
+#### Follower Growth Trend (12 Months)
+
+Line chart with one line per platform, showing follower count over time.
+
+```
+Followers │
+   15K    │                         ──── Instagram
+   12K    │                    ╱────────
+   10K    │              ╱────╱         ─── Facebook
+    8K    │        ╱────╱──────────────
+    5K    │  ╱────╱──────────          ─── TikTok
+    3K    │╱──────
+         │────────────────────────────────────────
+         │ Feb  Mar  Apr  May  Jun  Jul  Aug ...
+```
+
+#### Engagement by Platform (Bar Chart)
+
+Comparative bar chart showing engagement rate by platform.
+
+```
+        │
+  8%    │              ████
+  6%    │        ████  ████
+  4%    │  ████  ████  ████
+  2%    │  ████  ████  ████
+        │──────────────────────
+           IG     FB    TikTok
+```
+
+#### Content Type Performance (Stacked Bar or Donut)
+
+Shows which content types drive most engagement.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Content Type Performance                                       │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│   Reels      ████████████████████████████████  45%            │
+│   Carousels  █████████████████████  28%                       │
+│   Single     ██████████████  18%                              │
+│   Stories    ███████  9%                                       │
+│                                                                │
+│   Based on average engagement rate                            │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Top Posts Grid
+
+Visual grid showing top performing posts for the period.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Top Posts This Month                                          [View All Posts]         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐   │
+│  │  [Thumbnail]    │  │  [Thumbnail]    │  │  [Thumbnail]    │  │  [Thumbnail]    │   │
+│  │                 │  │                 │  │                 │  │                 │   │
+│  │  📸 Reel        │  │  📸 Carousel    │  │  🎵 Video       │  │  📸 Post        │   │
+│  ├─────────────────┤  ├─────────────────┤  ├─────────────────┤  ├─────────────────┤   │
+│  │ ❤️ 1,247        │  │ ❤️ 892         │  │ ❤️ 2,341        │  │ ❤️ 654         │   │
+│  │ 💬 89  🔗 156   │  │ 💬 67  🔗 45   │  │ 💬 234  🔗 189  │  │ 💬 34  🔗 23   │   │
+│  │ 8.2% eng rate   │  │ 6.4% eng rate   │  │ 12.1% eng rate  │  │ 5.8% eng rate   │   │
+│  │ Jan 15          │  │ Jan 12          │  │ Jan 8           │  │ Jan 22          │   │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘  └─────────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Post Performance Table
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ All Posts                                                                              [Export CSV]   │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ [🔍 Search caption...    ]  [Platform: All ▼]  [Type: All ▼]  [Date: This Month ▼]  [Sort: Eng ▼]    │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│   │ Date    │ Platform │ Type     │ Caption (truncated)          │ Likes │ Comments │ Reach │ Eng%  │
+│───┼─────────┼──────────┼──────────┼──────────────────────────────┼───────┼──────────┼───────┼───────│
+│ 🔥│ Jan 15  │ 📸 IG    │ Reel     │ Sunday brunch vibes 🥂...    │ 1,247 │    89    │ 15.2K │ 8.2%  │
+│   │ Jan 12  │ 📸 IG    │ Carousel │ New spring menu dropping... │   892 │    67    │ 13.9K │ 6.4%  │
+│ 🔥│ Jan 8   │ 🎵 TT    │ Video    │ POV: You're the oyster...   │ 2,341 │   234    │ 19.4K │ 12.1% │
+│   │ Jan 22  │ 📸 IG    │ Post     │ Chef Laurent with the...    │   654 │    34    │ 11.2K │ 5.8%  │
+│   │ Jan 18  │ 📘 FB    │ Post     │ Happy Hour starts at 4...   │   234 │    12    │  4.8K │ 5.1%  │
+│   │ ...     │          │          │                              │       │          │       │       │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Showing 1-10 of 23 posts                                        [← Prev]  Page 1 of 3  [Next →]      │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+🔥 = Top performer (top 10% engagement)
+```
+
+### Table Columns
+
+| Column | Description | Sortable |
+|--------|-------------|----------|
+| 🔥 | Top performer indicator | Filter |
+| Date | Published date | Yes (default desc) |
+| Platform | Social platform with icon | Filter |
+| Type | Post type (Reel, Carousel, etc.) | Filter |
+| Caption | Truncated caption | Search |
+| Likes | Like count | Yes |
+| Comments | Comment count | Yes |
+| Reach | Unique accounts reached | Yes |
+| Eng% | Engagement rate | Yes |
+
+### Row Click → Post Detail Drawer
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ ← Back                                         [View on IG →] │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │                                                         │  │
+│  │                    [Post Image/Video]                   │  │
+│  │                                                         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  📸 Instagram · Reel · January 15, 2025 at 11:30 AM          │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  CAPTION                                                      │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Sunday brunch vibes 🥂 Nothing beats a mimosa flight    │  │
+│  │ and our famous crab cake benedict. Book your table →    │  │
+│  │ link in bio                                             │  │
+│  │                                                         │  │
+│  │ #SanAntonioBrunch #PearlDistrict #SundayFunday         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  PERFORMANCE                                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐           │
+│  │ Likes       │  │ Comments    │  │ Shares      │           │
+│  │   1,247     │  │     89      │  │    156      │           │
+│  └─────────────┘  └─────────────┘  └─────────────┘           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐           │
+│  │ Saves       │  │ Reach       │  │ Impressions │           │
+│  │    312      │  │   15,200    │  │   18,450    │           │
+│  └─────────────┘  └─────────────┘  └─────────────┘           │
+│                                                               │
+│  Engagement Rate: 8.2%  ▲ +2.4% vs avg                       │
+│  🔥 Top 10% performer                                        │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  HASHTAGS USED                                                │
+│  #SanAntonioBrunch (used 12x, 5.8% avg eng)                  │
+│  #PearlDistrict (used 8x, 6.2% avg eng)                      │
+│  #SundayFunday (used 4x, 7.1% avg eng)                       │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Hashtag Performance Section (Collapsible)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Hashtag Performance                                              [+ Track Hashtag]     │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  Branded Hashtags                                                                       │
+│  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│  │ #Southerleigh          Used 24x     Avg Eng: 5.8%     Posts tagged: 1,247       │  │
+│  │ #SoutherleighPearl     Used 18x     Avg Eng: 6.2%     Posts tagged: 342         │  │
+│  └──────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+│  Top Performing Hashtags (by engagement when used)                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ Hashtag              │ Times Used │ Avg Engagement │ Avg Reach │ Category       │   │
+│  │──────────────────────┼────────────┼────────────────┼───────────┼────────────────│   │
+│  │ #SanAntonioBrunch    │     12     │     6.8%       │   12.4K   │ Local          │   │
+│  │ #PearlDistrict       │      8     │     6.2%       │   11.1K   │ Location       │   │
+│  │ #TexasFoodie         │      6     │     5.9%       │   14.2K   │ Food           │   │
+│  │ #CraftBeer           │      5     │     5.4%       │    9.8K   │ Beverage       │   │
+│  │ #BrunchGoals         │      4     │     7.1%       │   15.6K   │ Food           │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Competitor Comparison Section (Optional, Collapsible)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Competitor Tracking                                           [+ Add Competitor]       │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  Instagram Comparison                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ Account            │ Followers │ Growth │ Posts/Mo │ Engagement │ vs You        │   │
+│  │────────────────────┼───────────┼────────┼──────────┼────────────┼───────────────│   │
+│  │ ⭐ @southerleigh   │   12.4K   │ +3.5%  │     8    │    5.2%    │      —        │   │
+│  │ @caborestaurant    │   15.2K   │ +2.1%  │    12    │    4.1%    │ ▲ More eng    │   │
+│  │ @botikasa          │    8.9K   │ +4.2%  │     6    │    5.8%    │ ▼ Less eng    │   │
+│  │ @cureddining       │   11.1K   │ +1.8%  │     9    │    4.5%    │ ▲ More eng    │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  [View detailed comparison →]                                                          │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Social Media Sync Logic
+
+### Provider Sync (Daily at 7:00 AM)
+
+**Frequency:** Daily
+
+**Process:**
+1. For each location with SocialMediaConfig:
+   - Authenticate with provider (Sprout, Metricool, etc.)
+   - Refresh OAuth tokens if needed
+2. For each connected SocialProfile:
+   - Fetch current follower counts
+   - Fetch posts published since last sync
+   - Fetch engagement metrics for recent posts
+   - Update existing post metrics
+3. Create/update SocialPost records
+4. Update SocialProfile follower counts
+5. Recalculate SocialSnapshot for current month
+
+### Snapshot Calculation (End of Day)
+
+```typescript
+async function calculateSocialSnapshot(
+  profile: SocialProfile,
+  month: string
+): Promise<SocialSnapshot> {
+  const posts = await getPostsForMonth(profile.id, month);
+  
+  // Aggregate metrics
+  const totalLikes = posts.reduce((sum, p) => sum + p.likes, 0);
+  const totalComments = posts.reduce((sum, p) => sum + p.comments, 0);
+  const totalShares = posts.reduce((sum, p) => sum + p.shares, 0);
+  const totalSaves = posts.reduce((sum, p) => sum + (p.saves || 0), 0);
+  const totalReach = posts.reduce((sum, p) => sum + (p.reach || 0), 0);
+  
+  // Calculate engagement rate
+  const totalEngagements = totalLikes + totalComments + totalShares + totalSaves;
+  const engagementRate = totalReach > 0 
+    ? (totalEngagements / totalReach) * 100 
+    : 0;
+  
+  // Content breakdown
+  const feedPosts = posts.filter(p => p.postType === 'FEED_POST').length;
+  const reels = posts.filter(p => p.postType === 'REEL').length;
+  const stories = posts.filter(p => p.postType === 'STORY').length;
+  const videos = posts.filter(p => p.postType === 'VIDEO').length;
+  
+  // Find top post
+  const topPost = posts.reduce((top, p) => 
+    p.engagementTotal > (top?.engagementTotal || 0) ? p : top
+  , null);
+  
+  return {
+    profileId: profile.id,
+    month,
+    platform: profile.platform,
+    followerCount: profile.followerCount,
+    totalPosts: posts.length,
+    totalLikes,
+    totalComments,
+    totalShares,
+    totalSaves,
+    totalReach,
+    engagementRate,
+    feedPosts,
+    reels,
+    stories,
+    videos,
+    topPostId: topPost?.id,
+    topPostEngagement: topPost?.engagementTotal,
+  };
+}
+```
+
+### Provider-Specific Adapters
+
+```typescript
+interface SocialProviderAdapter {
+  authenticate(config: SocialMediaConfig): Promise<AuthTokens>;
+  getProfiles(config: SocialMediaConfig): Promise<SocialProfileData[]>;
+  getPosts(profileId: string, since: Date): Promise<SocialPostData[]>;
+  getPostMetrics(postIds: string[]): Promise<PostMetrics[]>;
+  getCompetitors?(handles: string[]): Promise<CompetitorData[]>;
+}
+
+// Implementations
+class SproutSocialAdapter implements SocialProviderAdapter { ... }
+class MetricoolAdapter implements SocialProviderAdapter { ... }
+class HootsuiteAdapter implements SocialProviderAdapter { ... }
+```
+
+---
+
+## Social Media API Endpoints
+
+### Connection & Config
+
+```typescript
+// Get social media config
+GET /api/locations/{id}/social-config
+
+// Connect provider (initiates OAuth flow)
+POST /api/locations/{id}/social-config/connect
+{
+  provider: SocialProvider  // "SPROUT_SOCIAL", "METRICOOL", etc.
+}
+// Returns: { redirectUrl: string } for OAuth
+
+// OAuth callback
+GET /api/auth/social/{provider}/callback?code=xxx&state=xxx
+
+// Disconnect provider
+DELETE /api/locations/{id}/social-config/disconnect
+
+// Get connected profiles
+GET /api/locations/{id}/social-profiles
+
+// Sync profiles from provider
+POST /api/locations/{id}/social-profiles/sync
+```
+
+### Snapshots & Analytics
+
+```typescript
+// Get monthly snapshot (aggregated across all platforms)
+GET /api/locations/{id}/social-snapshots?month=2025-01
+
+// Get snapshot for specific platform
+GET /api/locations/{id}/social-snapshots?month=2025-01&platform=INSTAGRAM
+
+// Get historical snapshots (12 months)
+GET /api/locations/{id}/social-snapshots/history
+  ?platform=INSTAGRAM
+  &months=12
+```
+
+### Posts
+
+```typescript
+// Get posts
+GET /api/locations/{id}/social-posts
+  ?page=1
+  &pageSize=25
+  &platform=INSTAGRAM
+  &postType=REEL
+  &dateFrom=2025-01-01
+  &dateTo=2025-01-31
+  &topPerformers=true
+  &sortBy=engagementRate
+  &sortOrder=desc
+
+// Get single post
+GET /api/locations/{id}/social-posts/{postId}
+
+// Get top posts for period
+GET /api/locations/{id}/social-posts/top
+  ?period=month
+  &limit=10
+```
+
+### Hashtags
+
+```typescript
+// Get hashtag performance
+GET /api/locations/{id}/social-hashtags
+  ?sortBy=avgEngagementRate
+  &limit=20
+
+// Track new hashtag
+POST /api/locations/{id}/social-hashtags
+{
+  hashtag: string,
+  category?: string,
+  isOwned?: boolean
+}
+
+// Delete tracked hashtag
+DELETE /api/locations/{id}/social-hashtags/{hashtagId}
+```
+
+### Competitors
+
+```typescript
+// Get competitors
+GET /api/locations/{id}/social-competitors
+  ?platform=INSTAGRAM
+
+// Add competitor
+POST /api/locations/{id}/social-competitors
+{
+  name: string,
+  platform: SocialPlatform,
+  handle: string
+}
+
+// Remove competitor
+DELETE /api/locations/{id}/social-competitors/{competitorId}
+```
+
+### Manual Sync
+
+```typescript
+// Trigger manual sync
+POST /api/sync/social
+{
+  locationId: string
+}
+```
+
+---
+
+## Social Media Data Export
+
+### Social Snapshot Export (CSV)
+
+- Month
+- Platform
+- Followers
+- Follower Change
+- Posts
+- Likes
+- Comments
+- Shares
+- Saves
+- Reach
+- Impressions
+- Engagement Rate
+
+### Social Posts Export (CSV)
+
+- Post ID
+- Platform
+- Post Type
+- Published Date
+- Caption
+- Hashtags
+- Likes
+- Comments
+- Shares
+- Saves
+- Reach
+- Impressions
+- Engagement Rate
+- Post URL
 
 ---
 
