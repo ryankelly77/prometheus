@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { BarChart3, Table2, Star } from 'lucide-react'
+import Link from 'next/link'
+import { Star } from 'lucide-react'
 import { useLocation } from '@/hooks/use-location'
 import {
   mockHealthScore,
@@ -15,7 +16,6 @@ import {
 import { StackedBar, TimeSeriesLine, DonutChart, CumulativeRatingChart } from '@/components/charts'
 import { MetricCard, PeriodSelector, SectionHeader } from '@/components/dashboard'
 import { Card, CardContent } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // Star rating display component
 function StarRating({ rating, size = 16 }: { rating: number; size?: number }) {
@@ -76,19 +76,22 @@ export default function ReviewsPage() {
       </div>
 
       {/* View Tabs */}
-      <Tabs defaultValue="charts">
-        <TabsList className="grid w-full grid-cols-2 max-w-xs">
-          <TabsTrigger value="charts" className="flex items-center gap-2">
-            <BarChart3 className="h-4 w-4" />
-            Charts
-          </TabsTrigger>
-          <TabsTrigger value="data" className="flex items-center gap-2">
-            <Table2 className="h-4 w-4" />
-            Data
-          </TabsTrigger>
-        </TabsList>
+      <div className="flex gap-1 border-b">
+        <Link
+          href="/dashboard/reviews"
+          className="border-b-2 border-primary px-4 py-2 text-sm font-medium text-primary"
+        >
+          Charts
+        </Link>
+        <Link
+          href="/dashboard/reviews/data"
+          className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+        >
+          Data
+        </Link>
+      </div>
 
-        <TabsContent value="charts" className="space-y-6 mt-6">
+      <div className="space-y-6 mt-6">
           {/* Summary Cards + Insights Row */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <MetricCard
@@ -232,26 +235,7 @@ export default function ReviewsPage() {
           explanation="Negative reviews include 1, 2, and 3 star ratings. Target is to keep below 6 per month."
         />
       </div>
-        </TabsContent>
-
-        <TabsContent value="data" className="mt-6">
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16">
-              <Table2 className="h-12 w-12 text-muted-foreground/50 mb-4" />
-              <h3 className="text-lg font-semibold mb-2">Review Data Table</h3>
-              <p className="text-muted-foreground text-center max-w-md mb-4">
-                View all reviews with search, filtering, and response management.
-              </p>
-              <a
-                href="/dashboard/reviews/data"
-                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-              >
-                View Data Table
-              </a>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      </div>
     </div>
   )
 }
