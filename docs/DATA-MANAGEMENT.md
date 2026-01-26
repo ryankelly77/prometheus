@@ -17,6 +17,254 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 
 ## Data Architecture
 
+### The Two Workloads Problem
+
+Prometheus serves two fundamentally different needs:
+
+1. **Dashboards** — Fast, pre-aggregated, real-time-ish queries (OLTP pattern)
+2. **Intelligence** — Deep, analytical, complex cross-referenced queries (OLAP pattern)
+
+These require different data structures. Our architecture addresses both.
+
+---
+
+### Architecture Overview
+
+```
+                                    EXTERNAL SOURCES
+          ┌─────────┬─────────┬─────────┬───────────┬─────────┬─────────────┐
+          │  Toast  │   R365  │OpenTable│BrightLocal│ SEMrush │Sprout/Social│
+          └────┬────┴────┬────┴────┬────┴─────┬─────┴────┬────┴──────┬──────┘
+               │         │         │          │          │           │
+               ▼         ▼         ▼          ▼          ▼           ▼
+    ┌──────────────────────────────────────────────────────────────────────────┐
+    │                          INGESTION LAYER                                 │
+    │                    (Nightly sync jobs via APIs)                          │
+    │    • Scheduled extraction      • Error handling & retry                  │
+    │    • Rate limit management     • Change detection                        │
+    │    • Raw response archival     • Validation & cleansing                  │
+    └──────────────────────────────────────┬───────────────────────────────────┘
+                                           │
+                       ┌───────────────────┴───────────────────┐
+                       ▼                                       ▼
+    ┌─────────────────────────────────────┐  ┌─────────────────────────────────────┐
+    │      OPERATIONAL DATA LAYER         │  │         DASHBOARD DATA LAYER        │
+    │        (Granular / Warehouse)       │  │           (Aggregated / Fast)       │
+    │                                     │  │                                     │
+    │  • DaypartMetrics (sales by shift)  │  │  • DailyMetrics (daily totals)      │
+    │  • MenuItemSales (item-level)       │  │  • MonthlyMetrics (rolled up)       │
+    │  • LaborDetail (by position)        │  │  • ReviewSnapshot (monthly agg)     │
+    │  • TransactionSummary (by day)      │  │  • VisibilitySnapshot               │
+    │  • HourlySales (future)             │  │  • SocialSnapshot                   │
+    │                                     │  │  • HealthScoreHistory               │
+    │  Retention: 2 years                 │  │                                     │
+    │  Purpose: Intelligence analysis     │  │  Retention: Forever                 │
+    │                                     │  │  Purpose: Fast dashboard queries    │
+    └─────────────────┬───────────────────┘  └─────────────────────────────────────┘
+                      │                                        ▲
+                      ▼                                        │
+    ┌─────────────────────────────────────┐                    │
+    │      TRANSFORMATION LAYER           │                    │
+    │           (ETL / dbt)               │────────────────────┘
+    │                                     │    Aggregates flow to dashboard layer
+    │  • Calculate daypart trends         │
+    │  • Compute menu item velocity       │
+    │  • Labor efficiency metrics         │
+    │  • Pre-built insight summaries      │
+    │  • Alert condition checks           │
+    └─────────────────┬───────────────────┘
+                      │
+                      ▼
+    ┌─────────────────────────────────────┐
+    │         INSIGHT CACHE LAYER         │
+    │      (Pre-calculated for AI)        │
+    │                                     │
+    │  • InsightCache table               │
+    │  • Refreshed nightly                │
+    │  • 7/30/90 day windows              │
+    │  • Structured JSON for Claude       │
+    └─────────────────┬───────────────────┘
+                      │
+                      ▼
+    ┌─────────────────────────────────────┐     ┌─────────────────────────────────┐
+    │       INTELLIGENCE ENGINE           │────▶│          CLAUDE API             │
+    │                                     │     │                                 │
+    │  • Context builder                  │     │  • ~10-15K tokens per run       │
+    │  • Report type router               │     │  • Structured output            │
+    │  • Usage tracking                   │     │  • Cost: $0.03-0.10/run         │
+    │  • Response parser                  │     │                                 │
+    └─────────────────────────────────────┘     └─────────────────────────────────┘
+```
+
+---
+
+### Data Layer Details
+
+#### Operational Layer (Warehouse-Style)
+
+This layer stores granular data needed for deep analysis. Without this, Intelligence is limited to surface-level insights.
+
+| Table | Grain | Rows/Location/Year | Purpose |
+|-------|-------|-------------------|---------|
+| DaypartMetrics | Day × Daypart | ~1,460 | Sales/labor by breakfast/lunch/dinner |
+| MenuItemSales | Week × Item | ~5,200 | Menu performance analysis |
+| LaborDetail | Day × Position | ~3,650 | Staffing optimization |
+| TransactionSummary | Day | ~365 | Payment mix, discounts, voids |
+| CategorySales | Day × Category | ~2,500 | Category performance |
+
+**At 100 locations: ~1.3M rows/year** — easily handled by Postgres
+
+#### Dashboard Layer (Aggregated)
+
+Pre-rolled data for instant dashboard loads. No complex queries needed.
+
+| Table | Grain | Purpose |
+|-------|-------|---------|
+| DailyMetrics | Day | Sales, costs, guest totals |
+| WeeklyMetrics | Week | Weekly rollups |
+| MonthlyMetrics | Month | Chart data, YoY comparisons |
+| ReviewSnapshot | Month | Review aggregates |
+| VisibilitySnapshot | Month | SEO/Maps aggregates |
+| SocialSnapshot | Month | Social media aggregates |
+
+#### Insight Cache Layer
+
+Pre-calculated analytics ready to feed to Claude. Refreshed nightly.
+
+| InsightType | Window | What's Pre-Calculated |
+|-------------|--------|----------------------|
+| SALES_TRENDS | 7/30/90d | Daypart trends, channel mix, vs prior period |
+| MENU_MOVERS | 30d | Top growing/declining items, velocity changes |
+| LABOR_EFFICIENCY | 30d | By daypart, overtime alerts, understaffed shifts |
+| GUEST_PATTERNS | 30d | Traffic trends, check avg, new vs returning |
+| REVIEW_THEMES | 30d | Common complaints, sentiment shifts |
+| CATEGORY_PERFORMANCE | 30d | Apps/Entrees/Drinks trends |
+| CHANNEL_MIX | 30d | Dine-in vs takeout vs delivery |
+
+---
+
+### Scaling Strategy
+
+#### Phase 1: MVP (0-50 Locations)
+
+**Single Supabase Database**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         SUPABASE                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  OPERATIONAL TABLES (Granular)                                  │
+│  ├── DaypartMetrics          90 days × 4 dayparts = 360 rows   │
+│  ├── MenuItemSalesWeekly     52 weeks × 100 items = 5,200 rows │
+│  ├── LaborDetail             365 days × 10 positions = 3,650   │
+│  └── TransactionSummary      365 days = 365 rows               │
+│                                                                 │
+│  DASHBOARD TABLES (Aggregated)                                  │
+│  ├── DailyMetrics            Pre-rolled daily totals           │
+│  ├── MonthlyMetrics          Pre-rolled monthly totals         │
+│  └── *Snapshot tables        Monthly aggregates                │
+│                                                                 │
+│  INSIGHT TABLES                                                 │
+│  ├── InsightCache            Pre-calculated AI context         │
+│  └── IntelligenceReport      Saved report history              │
+│                                                                 │
+│  APP TABLES                                                     │
+│  └── Locations, Users, Config, etc.                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+Why this works:
+• 50 locations × 15K rows/year = 750K rows/year
+• Good indexes + table partitioning = fast queries
+• Supabase Pro handles this easily
+• Single codebase, simple ops
+```
+
+#### Phase 2: Growth (50-200 Locations)
+
+**Add BigQuery for Analytics**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      SUPABASE (Operational)                     │
+│  • User-facing app data                                        │
+│  • Dashboard aggregates (fast reads)                           │
+│  • Real-time features                                          │
+│  • InsightCache (AI context)                                   │
+└─────────────────────────────────────────────────────────────────┘
+                               │
+                               │ Nightly sync
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      BIGQUERY (Analytics)                       │
+│  • All granular operational data                               │
+│  • 2+ years retention                                          │
+│  • Complex cross-location queries                              │
+│  • Intelligence context building                               │
+│  • Benchmarking across portfolio                               │
+└─────────────────────────────────────────────────────────────────┘
+                               │
+                               │ dbt transforms
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      DBT TRANSFORMS                             │
+│  • Calculate trends & aggregates                               │
+│  • Build InsightCache data                                     │
+│  • Push aggregates back to Supabase                           │
+└─────────────────────────────────────────────────────────────────┘
+
+Cost: ~$50-200/month for BigQuery at this scale
+```
+
+#### Phase 3: Enterprise (200+ Locations)
+
+**Full Data Platform**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     INGESTION (Fivetran/Airbyte)               │
+│  • Managed connectors to Toast, R365, etc.                     │
+│  • Automatic schema handling                                   │
+│  • Built-in error handling                                     │
+└──────────────────────────────┬──────────────────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  BIGQUERY / SNOWFLAKE                          │
+│                    (Enterprise Data Warehouse)                 │
+│  • Unlimited scale                                             │
+│  • Cross-location benchmarking                                 │
+│  • Portfolio-level analytics                                   │
+│  • ML features for predictions                                 │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              ▼                ▼                ▼
+┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+│    SUPABASE      │ │   LOOKER/MODE    │ │   INTELLIGENCE   │
+│   (App Layer)    │ │  (Ops Dashboards)│ │     ENGINE       │
+└──────────────────┘ └──────────────────┘ └──────────────────┘
+
+Cost: $500-2000/month depending on volume
+```
+
+---
+
+### Data Retention Strategy
+
+| Data Type | Granularity | Retention | Storage Location |
+|-----------|-------------|-----------|------------------|
+| DaypartMetrics | Daily × Daypart | 2 years | Operational |
+| MenuItemSales | Weekly × Item | 2 years | Operational |
+| LaborDetail | Daily × Position | 2 years | Operational |
+| TransactionSummary | Daily | 2 years | Operational |
+| Dashboard aggregates | Daily/Monthly | Forever | Dashboard |
+| InsightCache | Pre-calculated | 24-48 hours | Refreshed nightly |
+| IntelligenceReport | Saved reports | Forever | App |
+| Raw API responses | JSON archive | 90 days | Cold storage, then delete |
+
+---
+
 ### Storage Strategy
 
 ```
@@ -37,61 +285,71 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 ┌─────────────────────────────────────────────────────────────────┐
 │                      SUPABASE (Our DB)                          │
 ├─────────────────────────────────────────────────────────────────┤
-│  DailyMetrics          ← Source of truth (sales, costs)        │
-│  DailyCustomerMetrics  ← Guest counts by day                   │
-│  Review                ← Individual reviews (BrightLocal)      │
-│  ReviewSnapshot        ← Monthly review aggregates             │
-│  ReviewSourceConfig    ← Platform settings per location        │
-│  DailyReviews          ← Daily review aggregates (calculated)  │
-│  VisibilitySnapshot    ← Monthly website visibility (SEMrush)  │
-│  KeywordRanking        ← Individual keyword tracking           │
-│  MapsVisibilitySnapshot← Monthly maps visibility (BrightLocal) │
-│  LocalSearchGridResult ← Grid check results                    │
-│  KeywordLocalRanking   ← Local keyword positions               │
-│  NAPAudit              ← NAP consistency audits                │
-│  GBPAuditSnapshot      ← GBP optimization audits               │
-│  MapsVisibilityConfig  ← BrightLocal settings per location     │
-│  AIVisibilitySnapshot  ← Monthly AI visibility (Pro plan)      │
-│  PromptTracking        ← AI prompt results (Pro plan)          │
-│  VisibilityConfig      ← SEMrush settings per location         │
-│  SocialMediaConfig     ← Social provider settings              │
-│  SocialProfile         ← Connected social accounts             │
-│  SocialSnapshot        ← Monthly social metrics                │
-│  SocialPost            ← Individual post performance           │
-│  SocialHashtag         ← Hashtag tracking                      │
-│  SocialCompetitor      ← Competitor social tracking            │
-│  MediaMention          ← Individual press coverage             │
-│  MediaMentionSnapshot  ← Monthly PR aggregates                 │
-│  Award                 ← Awards and accolades                  │
-│  PRConfig              ← PR settings per location              │
-│  Guest                 ← Individual guest CRM data (OpenTable) │
-│  GuestVisit            ← Individual visit records              │
-│  GuestTag              ← Guest tags/labels                     │
-│  MonthlyMetrics        ← Rolled up from daily (cached)         │
-│  HealthScoreHistory    ← Calculated scores                     │
-│  SyncLog               ← Audit trail                           │
+│                                                                 │
+│  OPERATIONAL LAYER (Granular - For Intelligence)                │
+│  ├── DaypartMetrics        ← Sales/labor by daypart            │
+│  ├── MenuItemSales         ← Weekly item-level sales           │
+│  ├── LaborDetail           ← By position/department            │
+│  ├── TransactionSummary    ← Payment mix, discounts, voids     │
+│  └── CategorySales         ← Category performance              │
+│                                                                 │
+│  DASHBOARD LAYER (Aggregated - For Speed)                       │
+│  ├── DailyMetrics          ← Source of truth (sales, costs)    │
+│  ├── DailyCustomerMetrics  ← Guest counts by day               │
+│  ├── MonthlyMetrics        ← Rolled up from daily (cached)     │
+│  ├── ReviewSnapshot        ← Monthly review aggregates         │
+│  ├── VisibilitySnapshot    ← Monthly visibility aggregates     │
+│  ├── SocialSnapshot        ← Monthly social metrics            │
+│  └── MediaMentionSnapshot  ← Monthly PR aggregates             │
+│                                                                 │
+│  INSIGHT LAYER (Pre-Calculated - For AI)                        │
+│  ├── InsightCache          ← Pre-digested analytics            │
+│  ├── IntelligenceReport    ← Saved analysis reports            │
+│  └── AlertCondition        ← Triggered recommendations         │
+│                                                                 │
+│  DETAIL TABLES (Individual Records)                             │
+│  ├── Review                ← Individual reviews                │
+│  ├── KeywordRanking        ← Individual keyword tracking       │
+│  ├── KeywordLocalRanking   ← Local keyword positions           │
+│  ├── SocialPost            ← Individual post performance       │
+│  ├── MediaMention          ← Individual press coverage         │
+│  ├── Guest                 ← Individual guest CRM data         │
+│  └── GuestVisit            ← Individual visit records          │
+│                                                                 │
+│  CONFIG TABLES                                                  │
+│  ├── Location, User, Team                                      │
+│  ├── ReviewSourceConfig, VisibilityConfig                      │
+│  ├── MapsVisibilityConfig, SocialMediaConfig                   │
+│  └── PRConfig, IntelligenceConfig                              │
+│                                                                 │
+│  SYSTEM TABLES                                                  │
+│  ├── SyncLog               ← Audit trail                       │
+│  ├── HealthScoreHistory    ← Calculated scores                 │
+│  └── UsageTracking         ← Intelligence run tracking         │
+│                                                                 │
 └──────────────────────────────┬──────────────────────────────────┘
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      DASHBOARD                                  │
-│  - Charts pull from MonthlyMetrics (fast)                      │
-│  - Sales/Costs tables pull from DailyMetrics                   │
-│  - Guest CRM table pulls from Guest + GuestVisit               │
-│  - Reviews table pulls from Review                             │
-│  - Review charts pull from ReviewSnapshot                      │
-│  - Visibility charts pull from VisibilitySnapshot              │
-│  - Keyword table pulls from KeywordRanking                     │
-│  - Maps grid/charts pull from MapsVisibilitySnapshot           │
-│  - Local rankings table pulls from KeywordLocalRanking         │
-│  - NAP/GBP health pulls from NAPAudit, GBPAuditSnapshot        │
-│  - AI Visibility (Pro) pulls from AIVisibilitySnapshot         │
-│  - Prompt table (Pro) pulls from PromptTracking                │
-│  - Social charts pull from SocialSnapshot                      │
-│  - Posts table pulls from SocialPost                           │
-│  - PR charts pull from MediaMentionSnapshot                    │
-│  - Mentions table pulls from MediaMention                      │
-│  - Awards section pulls from Award                             │
-│  - Health scores from HealthScoreHistory                       │
+│                        CONSUMERS                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  DASHBOARD                                                      │
+│  ├── Charts pull from MonthlyMetrics (fast)                    │
+│  ├── Sales/Costs tables pull from DailyMetrics                 │
+│  ├── Guest CRM table pulls from Guest + GuestVisit             │
+│  ├── Reviews table pulls from Review                           │
+│  ├── Review charts pull from ReviewSnapshot                    │
+│  ├── Visibility charts pull from VisibilitySnapshot            │
+│  ├── Social charts pull from SocialSnapshot                    │
+│  ├── Posts table pulls from SocialPost                         │
+│  ├── PR charts pull from MediaMentionSnapshot                  │
+│  └── Health scores from HealthScoreHistory                     │
+│                                                                 │
+│  INTELLIGENCE ENGINE                                            │
+│  ├── Context built from InsightCache + Operational tables      │
+│  ├── Reports saved to IntelligenceReport                       │
+│  └── Usage tracked in UsageTracking                            │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -209,7 +467,1239 @@ model DailyCustomerMetrics {
 }
 ```
 
-### DailyReviews (Aggregated - Calculated from Review table)
+---
+
+## Operational Data Layer (Warehouse)
+
+These tables store granular data needed for Intelligence analysis. This is the "warehouse" layer that enables deep insights beyond simple dashboard metrics.
+
+### DaypartMetrics (Sales & Labor by Shift)
+
+The core operational table. Captures sales and labor at the daypart level (Breakfast, Lunch, Dinner, Late Night).
+
+```prisma
+model DaypartMetrics {
+  id              String   @id @default(cuid())
+  locationId      String
+  date            DateTime @db.Date
+  daypart         Daypart
+  
+  // Sales metrics
+  grossSales          Decimal  @db.Decimal(10, 2)
+  netSales            Decimal  @db.Decimal(10, 2)
+  discounts           Decimal  @db.Decimal(10, 2)  @default(0)
+  comps               Decimal  @db.Decimal(10, 2)  @default(0)
+  voids               Decimal  @db.Decimal(10, 2)  @default(0)
+  refunds             Decimal  @db.Decimal(10, 2)  @default(0)
+  
+  // Guest metrics
+  guestCount          Int
+  checkCount          Int      // Number of tickets/transactions
+  checkAverage        Decimal  @db.Decimal(10, 2)
+  
+  // Revenue center breakdown
+  dineInSales         Decimal? @db.Decimal(10, 2)
+  dineInGuests        Int?
+  barSales            Decimal? @db.Decimal(10, 2)
+  barGuests           Int?
+  takeoutSales        Decimal? @db.Decimal(10, 2)
+  takeoutOrders       Int?
+  deliverySales       Decimal? @db.Decimal(10, 2)
+  deliveryOrders      Int?
+  cateringSales       Decimal? @db.Decimal(10, 2)
+  cateringOrders      Int?
+  
+  // Labor metrics
+  laborHours          Decimal  @db.Decimal(10, 2)
+  laborCost           Decimal  @db.Decimal(10, 2)
+  laborPercent        Decimal  @db.Decimal(5, 2)   // (laborCost / netSales) * 100
+  
+  // Labor breakdown by department
+  fohHours            Decimal? @db.Decimal(10, 2)
+  fohCost             Decimal? @db.Decimal(10, 2)
+  bohHours            Decimal? @db.Decimal(10, 2)
+  bohCost             Decimal? @db.Decimal(10, 2)
+  
+  // Staffing counts
+  fohHeadcount        Int?     // Number of FOH employees worked
+  bohHeadcount        Int?     // Number of BOH employees worked
+  
+  // Weather (for context)
+  weatherCondition    String?  // "sunny", "rainy", "snow"
+  highTemp            Int?
+  lowTemp             Int?
+  
+  // Targets (optional, for comparison)
+  salesTarget         Decimal? @db.Decimal(10, 2)
+  laborTarget         Decimal? @db.Decimal(5, 2)   // Target labor %
+  guestTarget         Int?
+  
+  // Sync metadata
+  source              String   @default("TOAST")
+  syncedAt            DateTime
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  @@unique([locationId, date, daypart])
+  @@index([locationId, date])
+  @@index([locationId, daypart])
+}
+
+enum Daypart {
+  BREAKFAST       // Typically 6am-11am
+  LUNCH           // Typically 11am-4pm
+  DINNER          // Typically 4pm-10pm
+  LATE_NIGHT      // Typically 10pm-close
+}
+```
+
+### MenuItemSales (Weekly Item Performance)
+
+Track menu item performance at the weekly level. Enables menu engineering and product mix analysis.
+
+```prisma
+model MenuItemSales {
+  id              String   @id @default(cuid())
+  locationId      String
+  weekStart       DateTime @db.Date  // Monday of the week
+  
+  // Item identification
+  itemId              String   // Toast/POS item ID
+  itemName            String
+  plu                 String?  // PLU code if available
+  
+  // Categorization
+  category            String   // "Appetizers", "Entrees", "Desserts", etc.
+  subcategory         String?  // "Salads", "Steaks", etc.
+  menuSection         String?  // "Lunch Menu", "Dinner Menu", "Bar Menu"
+  
+  // Sales metrics
+  quantitySold        Int
+  grossSales          Decimal  @db.Decimal(10, 2)
+  netSales            Decimal  @db.Decimal(10, 2)
+  discountAmount      Decimal  @db.Decimal(10, 2)  @default(0)
+  
+  // Pricing
+  avgPrice            Decimal  @db.Decimal(10, 2)  // Net sales / qty
+  menuPrice           Decimal? @db.Decimal(10, 2)  // Listed price
+  
+  // Cost metrics (from R365 if available)
+  theoreticalCost     Decimal? @db.Decimal(10, 2)  // Expected food cost
+  actualCost          Decimal? @db.Decimal(10, 2)  // Actual food cost
+  costPercent         Decimal? @db.Decimal(5, 2)   // (cost / price) * 100
+  marginPercent       Decimal? @db.Decimal(5, 2)   // ((price - cost) / price) * 100
+  contributionMargin  Decimal? @db.Decimal(10, 2)  // (price - cost) * qty
+  
+  // Daypart breakdown (optional)
+  breakfastQty        Int?
+  lunchQty            Int?
+  dinnerQty           Int?
+  lateNightQty        Int?
+  
+  // Channel breakdown (optional)
+  dineInQty           Int?
+  takeoutQty          Int?
+  deliveryQty         Int?
+  
+  // Modifications
+  modifierRevenue     Decimal? @db.Decimal(10, 2)
+  avgModifiersPerItem Decimal? @db.Decimal(5, 2)
+  
+  // Void/Waste
+  voidedQty           Int?     @default(0)
+  voidedAmount        Decimal? @db.Decimal(10, 2)
+  
+  // Sync metadata
+  source              String   @default("TOAST")
+  syncedAt            DateTime
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  @@unique([locationId, weekStart, itemId])
+  @@index([locationId, weekStart])
+  @@index([locationId, category])
+  @@index([locationId, itemName])
+}
+```
+
+### CategorySales (Daily Category Performance)
+
+Higher-level category aggregation for faster trend analysis.
+
+```prisma
+model CategorySales {
+  id              String   @id @default(cuid())
+  locationId      String
+  date            DateTime @db.Date
+  
+  category            String   // "Appetizers", "Entrees", "Beverages", etc.
+  
+  // Sales metrics
+  quantitySold        Int
+  netSales            Decimal  @db.Decimal(10, 2)
+  
+  // Mix metrics
+  percentOfSales      Decimal  @db.Decimal(5, 2)   // % of total daily sales
+  percentOfItems      Decimal  @db.Decimal(5, 2)   // % of total items sold
+  
+  // Check contribution
+  attachRate          Decimal? @db.Decimal(5, 2)   // % of checks containing this category
+  avgPerCheck         Decimal? @db.Decimal(10, 2)  // Avg category $ per check
+  
+  // Margins (if available)
+  avgCostPercent      Decimal? @db.Decimal(5, 2)
+  totalMargin         Decimal? @db.Decimal(10, 2)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, date, category])
+  @@index([locationId, date])
+}
+```
+
+### LaborDetail (Daily Labor by Position)
+
+Detailed labor breakdown by position for staffing optimization.
+
+```prisma
+model LaborDetail {
+  id              String   @id @default(cuid())
+  locationId      String
+  date            DateTime @db.Date
+  
+  // Position info
+  position            String   // "Server", "Cook", "Host", "Bartender", etc.
+  department          LaborDepartment
+  
+  // Hours
+  regularHours        Decimal  @db.Decimal(10, 2)
+  overtimeHours       Decimal  @db.Decimal(10, 2)  @default(0)
+  doubleTimeHours     Decimal  @db.Decimal(10, 2)  @default(0)
+  totalHours          Decimal  @db.Decimal(10, 2)
+  
+  // Pay
+  regularPay          Decimal  @db.Decimal(10, 2)
+  overtimePay         Decimal  @db.Decimal(10, 2)  @default(0)
+  doubleTimePay       Decimal  @db.Decimal(10, 2)  @default(0)
+  totalPay            Decimal  @db.Decimal(10, 2)
+  
+  // Staffing
+  headcount           Int      // Number of employees worked this position
+  avgHoursPerPerson   Decimal  @db.Decimal(5, 2)
+  avgPayPerPerson     Decimal  @db.Decimal(10, 2)
+  
+  // Efficiency (calculated)
+  salesPerLaborHour   Decimal? @db.Decimal(10, 2)  // SPLH
+  guestsPerLaborHour  Decimal? @db.Decimal(10, 2)
+  
+  // Tips (if tracked)
+  totalTips           Decimal? @db.Decimal(10, 2)
+  tipsPerHour         Decimal? @db.Decimal(10, 2)
+  
+  // Sync metadata
+  source              String   @default("TOAST")
+  syncedAt            DateTime
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  @@unique([locationId, date, position])
+  @@index([locationId, date])
+  @@index([locationId, department])
+}
+
+enum LaborDepartment {
+  FOH       // Front of House
+  BOH       // Back of House
+  MGMT      // Management
+  ADMIN     // Administrative
+  OTHER
+}
+```
+
+### TransactionSummary (Daily Transaction Metrics)
+
+Transaction-level aggregates for payment mix and discount analysis.
+
+```prisma
+model TransactionSummary {
+  id              String   @id @default(cuid())
+  locationId      String
+  date            DateTime @db.Date
+  
+  // Transaction counts
+  totalTransactions   Int
+  dineInTransactions  Int?
+  takeoutTransactions Int?
+  deliveryTransactions Int?
+  
+  // Payment method mix
+  cashAmount          Decimal  @db.Decimal(10, 2)  @default(0)
+  cashCount           Int      @default(0)
+  creditAmount        Decimal  @db.Decimal(10, 2)  @default(0)
+  creditCount         Int      @default(0)
+  debitAmount         Decimal  @db.Decimal(10, 2)  @default(0)
+  debitCount          Int      @default(0)
+  giftCardAmount      Decimal  @db.Decimal(10, 2)  @default(0)
+  giftCardCount       Int      @default(0)
+  mobilePayAmount     Decimal? @db.Decimal(10, 2)  // Apple Pay, Google Pay
+  mobilePayCount      Int?
+  otherPaymentAmount  Decimal? @db.Decimal(10, 2)
+  otherPaymentCount   Int?
+  
+  // Discounts
+  totalDiscountAmount Decimal  @db.Decimal(10, 2)  @default(0)
+  discountCount       Int      @default(0)
+  avgDiscountPercent  Decimal? @db.Decimal(5, 2)
+  
+  // Discount breakdown by type
+  promoDiscounts      Decimal? @db.Decimal(10, 2)
+  employeeDiscounts   Decimal? @db.Decimal(10, 2)
+  managerComps        Decimal? @db.Decimal(10, 2)
+  loyaltyDiscounts    Decimal? @db.Decimal(10, 2)
+  
+  // Voids & Refunds
+  voidAmount          Decimal  @db.Decimal(10, 2)  @default(0)
+  voidCount           Int      @default(0)
+  refundAmount        Decimal  @db.Decimal(10, 2)  @default(0)
+  refundCount         Int      @default(0)
+  
+  // Service charges & fees
+  serviceCharges      Decimal? @db.Decimal(10, 2)
+  deliveryFees        Decimal? @db.Decimal(10, 2)
+  processingFees      Decimal? @db.Decimal(10, 2)
+  
+  // Tips
+  totalTips           Decimal? @db.Decimal(10, 2)
+  tipPercentAvg       Decimal? @db.Decimal(5, 2)
+  
+  // Gift cards
+  giftCardsSold       Decimal? @db.Decimal(10, 2)
+  giftCardsSoldCount  Int?
+  
+  // Sync metadata
+  source              String   @default("TOAST")
+  syncedAt            DateTime
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, date])
+  @@index([locationId, date])
+}
+```
+
+### HourlySales (Future - Granular)
+
+For Phase 2: Hour-by-hour sales for detailed shift optimization.
+
+```prisma
+model HourlySales {
+  id              String   @id @default(cuid())
+  locationId      String
+  date            DateTime @db.Date
+  hour            Int      // 0-23
+  
+  netSales            Decimal  @db.Decimal(10, 2)
+  guestCount          Int
+  checkCount          Int
+  checkAverage        Decimal  @db.Decimal(10, 2)
+  
+  laborHours          Decimal? @db.Decimal(10, 2)
+  laborCost           Decimal? @db.Decimal(10, 2)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, date, hour])
+  @@index([locationId, date])
+}
+```
+
+---
+
+## Insight Cache Layer (Pre-Calculated for AI)
+
+Pre-calculated analytics that feed into the Intelligence engine. Refreshed nightly to avoid expensive real-time queries.
+
+### InsightCache (Pre-Digested Analytics)
+
+```prisma
+model InsightCache {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  insightType         InsightType
+  periodDays          Int          // 7, 30, 90
+  
+  // The pre-digested insight data as structured JSON
+  data                Json
+  
+  // Calculation metadata
+  calculatedAt        DateTime     @default(now())
+  expiresAt           DateTime
+  dataVersion         Int          @default(1)  // For cache invalidation
+  
+  // Status
+  isStale             Boolean      @default(false)
+  lastError           String?
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, insightType, periodDays])
+  @@index([locationId, expiresAt])
+  @@index([isStale])
+}
+
+enum InsightType {
+  // Sales insights
+  SALES_TRENDS           // Daypart trends, vs prior period, seasonality
+  CHANNEL_MIX            // Dine-in vs takeout vs delivery trends
+  CHECK_ANALYSIS         // Check avg trends, party size
+  
+  // Menu insights
+  MENU_MOVERS            // Top growing/declining items
+  CATEGORY_PERFORMANCE   // Category trends, attach rates
+  MENU_ENGINEERING       // Stars, plowhorses, puzzles, dogs
+  
+  // Labor insights
+  LABOR_EFFICIENCY       // By daypart, overtime alerts, SPLH
+  STAFFING_PATTERNS      // Over/understaffed periods
+  
+  // Guest insights
+  GUEST_PATTERNS         // Traffic trends, new vs returning
+  LOYALTY_METRICS        // VIP behavior, churn risk
+  
+  // Review insights
+  REVIEW_THEMES          // Common complaints/praise (NLP summary)
+  SENTIMENT_TRENDS       // Sentiment over time
+  
+  // Operational alerts
+  ALERT_CONDITIONS       // Triggered alert flags
+}
+```
+
+### InsightCache Data Structure Examples
+
+```typescript
+// ═══════════════════════════════════════════════════════════════
+// INSIGHT CACHE DATA STRUCTURES
+// These are stored in the `data` JSON field of InsightCache
+// ═══════════════════════════════════════════════════════════════
+
+// InsightType: SALES_TRENDS
+interface SalesTrendsInsight {
+  summary: {
+    totalNetSales: number;
+    vsPriorPeriod: number;      // % change
+    vsLastYear: number;         // % change (if available)
+    avgDailySales: number;
+  };
+  byDaypart: Array<{
+    daypart: 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'LATE_NIGHT';
+    netSales: number;
+    salesChange: number;        // % vs prior period
+    guestCount: number;
+    guestChange: number;        // % vs prior period
+    checkAverage: number;
+    checkAvgChange: number;     // % vs prior period
+    percentOfTotal: number;     // % of total sales
+  }>;
+  byDayOfWeek: Array<{
+    day: string;                // "Monday", "Tuesday", etc.
+    avgSales: number;
+    vsPriorPeriod: number;
+  }>;
+  byChannel: Array<{
+    channel: 'dineIn' | 'takeout' | 'delivery' | 'catering';
+    netSales: number;
+    salesChange: number;
+    percentOfTotal: number;
+  }>;
+  alerts: Array<{
+    type: 'decline' | 'growth' | 'anomaly';
+    severity: 'high' | 'medium' | 'low';
+    message: string;
+    metric: string;
+    value: number;
+    change: number;
+  }>;
+  topDays: Array<{
+    date: string;
+    sales: number;
+    reason?: string;            // "Saturday", "Holiday", etc.
+  }>;
+  bottomDays: Array<{
+    date: string;
+    sales: number;
+    reason?: string;
+  }>;
+}
+
+// InsightType: MENU_MOVERS
+interface MenuMoversInsight {
+  summary: {
+    totalItemsSold: number;
+    uniqueItemsSold: number;
+    avgItemsPerCheck: number;
+  };
+  topGrowing: Array<{
+    itemName: string;
+    category: string;
+    currentQty: number;
+    priorQty: number;
+    change: number;             // % change
+    currentSales: number;
+    marginPercent?: number;
+  }>;
+  topDeclining: Array<{
+    itemName: string;
+    category: string;
+    currentQty: number;
+    priorQty: number;
+    change: number;             // % change (negative)
+    currentSales: number;
+    marginPercent?: number;
+  }>;
+  topSellers: Array<{
+    itemName: string;
+    category: string;
+    quantity: number;
+    netSales: number;
+    percentOfSales: number;
+  }>;
+  categoryTrends: Array<{
+    category: string;
+    currentSales: number;
+    salesChange: number;
+    attachRate: number;         // % of checks
+    attachRateChange: number;
+  }>;
+  alerts: Array<{
+    type: 'decline' | 'opportunity' | 'anomaly';
+    severity: 'high' | 'medium' | 'low';
+    message: string;
+    item?: string;
+    category?: string;
+  }>;
+}
+
+// InsightType: LABOR_EFFICIENCY
+interface LaborEfficiencyInsight {
+  summary: {
+    totalLaborCost: number;
+    totalLaborHours: number;
+    avgLaborPercent: number;
+    laborPercentTarget: number;
+    vsPriorPeriod: number;
+  };
+  byDaypart: Array<{
+    daypart: string;
+    laborCost: number;
+    laborHours: number;
+    laborPercent: number;
+    salesPerLaborHour: number;  // SPLH
+    vsTarget: number;           // +/- vs target
+    efficiency: 'optimal' | 'overstaffed' | 'understaffed';
+  }>;
+  byDepartment: Array<{
+    department: 'FOH' | 'BOH' | 'MGMT';
+    laborCost: number;
+    laborPercent: number;
+    headcount: number;
+    avgHoursPerPerson: number;
+  }>;
+  byDayOfWeek: Array<{
+    day: string;
+    avgLaborPercent: number;
+    avgSPLH: number;
+    efficiency: 'optimal' | 'overstaffed' | 'understaffed';
+  }>;
+  overtimeAnalysis: {
+    totalOvertimeHours: number;
+    totalOvertimeCost: number;
+    topOvertimePositions: Array<{
+      position: string;
+      overtimeHours: number;
+      overtimeCost: number;
+    }>;
+  };
+  alerts: Array<{
+    type: 'overstaffed' | 'understaffed' | 'overtime' | 'efficiency';
+    severity: 'high' | 'medium' | 'low';
+    message: string;
+    daypart?: string;
+    day?: string;
+    position?: string;
+    potentialSavings?: number;
+  }>;
+  recommendations: Array<{
+    action: string;
+    impact: string;
+    savingsEstimate?: number;
+  }>;
+}
+
+// InsightType: REVIEW_THEMES
+interface ReviewThemesInsight {
+  summary: {
+    totalReviews: number;
+    avgRating: number;
+    ratingChange: number;
+    responseRate: number;
+  };
+  sentimentBreakdown: {
+    positive: number;           // Count
+    neutral: number;
+    negative: number;
+  };
+  themes: {
+    positive: Array<{
+      theme: string;            // "Service", "Food Quality", "Atmosphere"
+      mentions: number;
+      sampleReviews: string[];  // Excerpts
+    }>;
+    negative: Array<{
+      theme: string;
+      mentions: number;
+      sampleReviews: string[];
+      suggestedAction?: string;
+    }>;
+  };
+  byPlatform: Array<{
+    platform: string;
+    reviewCount: number;
+    avgRating: number;
+    ratingChange: number;
+  }>;
+  responseAnalysis: {
+    avgResponseTime: number;    // Hours
+    respondedCount: number;
+    pendingCount: number;
+  };
+  alerts: Array<{
+    type: 'negative_trend' | 'unresponded' | 'theme_spike';
+    severity: 'high' | 'medium' | 'low';
+    message: string;
+  }>;
+}
+
+// InsightType: ALERT_CONDITIONS
+interface AlertConditionsInsight {
+  triggeredAlerts: Array<{
+    alertType: string;
+    title: string;
+    message: string;
+    severity: 'critical' | 'warning' | 'info';
+    metric: string;
+    currentValue: number;
+    threshold: number;
+    triggeredAt: string;
+    suggestedReport?: string;   // Which Intelligence report to run
+  }>;
+  watchList: Array<{
+    metric: string;
+    currentValue: number;
+    threshold: number;
+    trend: 'improving' | 'stable' | 'worsening';
+    daysToThreshold?: number;
+  }>;
+}
+```
+
+### IntelligenceReport (Saved Analysis Results)
+
+```prisma
+model IntelligenceReport {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Report type
+  reportType          ReportType
+  title               String
+  
+  // Request context
+  requestedAt         DateTime @default(now())
+  requestedBy         String?  // User ID who requested
+  
+  // Input context (what was sent to AI)
+  inputContext        Json     // The data sent to Claude
+  inputTokenCount     Int?
+  
+  // Output
+  summary             String   @db.Text  // Executive summary
+  fullReport          Json     // Structured report content
+  outputTokenCount    Int?
+  
+  // Actions extracted from report
+  actions             Json?    // Array of action items
+  
+  // Projected impact
+  projectedImpact     Json?    // { metric, currentValue, projectedValue, timeframe }
+  
+  // Metadata
+  modelUsed           String   // "claude-3-sonnet", etc.
+  processingTimeMs    Int?
+  estimatedCost       Decimal? @db.Decimal(10, 4)  // API cost
+  
+  // User interaction
+  isRead              Boolean  @default(false)
+  isArchived          Boolean  @default(false)
+  userRating          Int?     // 1-5 rating from user
+  userFeedback        String?  @db.Text
+  
+  // Action tracking
+  actionsCompleted    Int      @default(0)
+  actionsTotal        Int      @default(0)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  @@index([locationId, reportType])
+  @@index([locationId, createdAt])
+  @@index([requestedBy])
+}
+
+enum ReportType {
+  // Diagnostic reports
+  SALES_DECLINE_ANALYSIS
+  LABOR_OPTIMIZATION
+  MENU_PROFITABILITY
+  REVIEW_RESPONSE_STRATEGY
+  
+  // Strategic reports
+  COMPETITIVE_ANALYSIS
+  MARKETING_ROI
+  GUEST_RETENTION
+  SEO_OPPORTUNITIES
+  CONTENT_STRATEGY
+  
+  // Operational reports
+  STAFFING_RECOMMENDATIONS
+  COST_CONTROL
+  WASTE_ANALYSIS
+  
+  // Custom
+  CUSTOM_QUESTION
+}
+```
+
+### IntelligenceConfig (Per-Location Settings)
+
+```prisma
+model IntelligenceConfig {
+  id              String   @id @default(cuid())
+  locationId      String   @unique
+  
+  // Usage limits
+  monthlyRunLimit     Int      @default(10)
+  runsUsedThisMonth   Int      @default(0)
+  limitResetDate      DateTime
+  
+  // Preferences
+  preferredModel      String   @default("claude-3-sonnet")
+  includeCompetitors  Boolean  @default(false)
+  autoRunAlerts       Boolean  @default(false)  // Auto-run reports on alerts
+  
+  // Notification settings
+  emailReports        Boolean  @default(true)
+  notifyOnAlerts      Boolean  @default(true)
+  
+  // Targets (used in analysis)
+  laborPercentTarget  Decimal? @db.Decimal(5, 2)
+  foodCostTarget      Decimal? @db.Decimal(5, 2)
+  reviewRatingTarget  Decimal? @db.Decimal(3, 2)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+```
+
+### UsageTracking (Intelligence Run Tracking)
+
+```prisma
+model UsageTracking {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Usage event
+  eventType           UsageEventType
+  reportType          ReportType?
+  
+  // Tokens
+  inputTokens         Int
+  outputTokens        Int
+  totalTokens         Int
+  
+  // Cost
+  estimatedCost       Decimal  @db.Decimal(10, 4)
+  
+  // Timing
+  processingTimeMs    Int
+  
+  // User
+  userId              String?
+  
+  // Status
+  status              UsageStatus
+  errorMessage        String?
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  
+  @@index([locationId, createdAt])
+  @@index([locationId, eventType])
+}
+
+enum UsageEventType {
+  INTELLIGENCE_RUN
+  INSIGHT_REFRESH
+  CUSTOM_QUERY
+}
+
+enum UsageStatus {
+  SUCCESS
+  FAILED
+  RATE_LIMITED
+  CANCELLED
+}
+```
+
+---
+
+## ETL Pipeline
+
+### Nightly Sync Process
+
+```typescript
+// ═══════════════════════════════════════════════════════════════
+// ETL PIPELINE - Runs at 6:00 AM daily
+// ═══════════════════════════════════════════════════════════════
+
+async function nightlyETL(locationId: string): Promise<void> {
+  const yesterday = getYesterday();
+  
+  try {
+    // ─────────────────────────────────────────────────────────
+    // PHASE 1: EXTRACT - Pull from external sources
+    // ─────────────────────────────────────────────────────────
+    
+    // Toast POS data
+    const toastData = await extractToastData(locationId, yesterday);
+    // Returns: { dayparts, labor, transactions, menuItems }
+    
+    // R365 data (if connected)
+    const r365Data = await extractR365Data(locationId, yesterday);
+    // Returns: { foodCost, invoices, inventory }
+    
+    // ─────────────────────────────────────────────────────────
+    // PHASE 2: LOAD - Store granular operational data
+    // ─────────────────────────────────────────────────────────
+    
+    // Daypart metrics
+    await upsertDaypartMetrics(locationId, yesterday, toastData.dayparts);
+    
+    // Labor detail
+    await upsertLaborDetail(locationId, yesterday, toastData.labor);
+    
+    // Transaction summary
+    await upsertTransactionSummary(locationId, yesterday, toastData.transactions);
+    
+    // Category sales
+    await upsertCategorySales(locationId, yesterday, toastData.menuItems);
+    
+    // Weekly: Menu item sales (run on Mondays)
+    if (isMonday()) {
+      const weekStart = getLastMonday();
+      await upsertMenuItemSales(locationId, weekStart, toastData.menuItems);
+    }
+    
+    // ─────────────────────────────────────────────────────────
+    // PHASE 3: TRANSFORM - Calculate dashboard aggregates
+    // ─────────────────────────────────────────────────────────
+    
+    // Update DailyMetrics (dashboard layer)
+    await updateDailyMetrics(locationId, yesterday, {
+      toast: toastData,
+      r365: r365Data,
+    });
+    
+    // Update MonthlyMetrics (if end of month or data changed)
+    await refreshMonthlyMetrics(locationId, getCurrentMonth());
+    
+    // ─────────────────────────────────────────────────────────
+    // PHASE 4: INSIGHTS - Pre-calculate for Intelligence
+    // ─────────────────────────────────────────────────────────
+    
+    // Refresh all insight caches
+    await refreshInsightCache(locationId, InsightType.SALES_TRENDS, 30);
+    await refreshInsightCache(locationId, InsightType.MENU_MOVERS, 30);
+    await refreshInsightCache(locationId, InsightType.LABOR_EFFICIENCY, 30);
+    await refreshInsightCache(locationId, InsightType.GUEST_PATTERNS, 30);
+    await refreshInsightCache(locationId, InsightType.CATEGORY_PERFORMANCE, 30);
+    await refreshInsightCache(locationId, InsightType.CHANNEL_MIX, 30);
+    
+    // Check alert conditions
+    await checkAlertConditions(locationId);
+    
+    // ─────────────────────────────────────────────────────────
+    // PHASE 5: LOG - Record sync status
+    // ─────────────────────────────────────────────────────────
+    
+    await createSyncLog(locationId, {
+      status: 'SUCCESS',
+      dataDate: yesterday,
+      recordsProcessed: {
+        dayparts: toastData.dayparts.length,
+        labor: toastData.labor.length,
+        menuItems: toastData.menuItems.length,
+      },
+    });
+    
+  } catch (error) {
+    await createSyncLog(locationId, {
+      status: 'FAILED',
+      dataDate: yesterday,
+      error: error.message,
+    });
+    
+    // Alert on failure
+    await sendSyncFailureAlert(locationId, error);
+  }
+}
+```
+
+### Insight Cache Refresh Logic
+
+```typescript
+// ═══════════════════════════════════════════════════════════════
+// INSIGHT CACHE REFRESH
+// ═══════════════════════════════════════════════════════════════
+
+async function refreshInsightCache(
+  locationId: string,
+  insightType: InsightType,
+  periodDays: number
+): Promise<void> {
+  
+  const startDate = subDays(new Date(), periodDays);
+  const endDate = new Date();
+  
+  let data: any;
+  
+  switch (insightType) {
+    case InsightType.SALES_TRENDS:
+      data = await calculateSalesTrends(locationId, startDate, endDate);
+      break;
+      
+    case InsightType.MENU_MOVERS:
+      data = await calculateMenuMovers(locationId, startDate, endDate);
+      break;
+      
+    case InsightType.LABOR_EFFICIENCY:
+      data = await calculateLaborEfficiency(locationId, startDate, endDate);
+      break;
+      
+    case InsightType.GUEST_PATTERNS:
+      data = await calculateGuestPatterns(locationId, startDate, endDate);
+      break;
+      
+    case InsightType.CATEGORY_PERFORMANCE:
+      data = await calculateCategoryPerformance(locationId, startDate, endDate);
+      break;
+      
+    case InsightType.CHANNEL_MIX:
+      data = await calculateChannelMix(locationId, startDate, endDate);
+      break;
+      
+    case InsightType.REVIEW_THEMES:
+      data = await calculateReviewThemes(locationId, startDate, endDate);
+      break;
+      
+    case InsightType.ALERT_CONDITIONS:
+      data = await checkAlertConditions(locationId);
+      break;
+      
+    default:
+      throw new Error(`Unknown insight type: ${insightType}`);
+  }
+  
+  // Upsert the cache
+  await prisma.insightCache.upsert({
+    where: {
+      locationId_insightType_periodDays: {
+        locationId,
+        insightType,
+        periodDays,
+      },
+    },
+    update: {
+      data,
+      calculatedAt: new Date(),
+      expiresAt: addHours(new Date(), 24),
+      isStale: false,
+      lastError: null,
+    },
+    create: {
+      locationId,
+      insightType,
+      periodDays,
+      data,
+      calculatedAt: new Date(),
+      expiresAt: addHours(new Date(), 24),
+    },
+  });
+}
+
+// Example calculation function
+async function calculateSalesTrends(
+  locationId: string,
+  startDate: Date,
+  endDate: Date
+): Promise<SalesTrendsInsight> {
+  
+  // Get daypart metrics for the period
+  const currentPeriod = await prisma.daypartMetrics.findMany({
+    where: {
+      locationId,
+      date: { gte: startDate, lte: endDate },
+    },
+    orderBy: { date: 'asc' },
+  });
+  
+  // Get prior period for comparison
+  const priorStart = subDays(startDate, differenceInDays(endDate, startDate));
+  const priorPeriod = await prisma.daypartMetrics.findMany({
+    where: {
+      locationId,
+      date: { gte: priorStart, lt: startDate },
+    },
+  });
+  
+  // Calculate aggregates
+  const totalNetSales = sumBy(currentPeriod, 'netSales');
+  const priorTotalSales = sumBy(priorPeriod, 'netSales');
+  const vsPriorPeriod = priorTotalSales > 0 
+    ? ((totalNetSales - priorTotalSales) / priorTotalSales) * 100 
+    : 0;
+  
+  // Group by daypart
+  const byDaypart = Object.values(Daypart).map(daypart => {
+    const current = currentPeriod.filter(d => d.daypart === daypart);
+    const prior = priorPeriod.filter(d => d.daypart === daypart);
+    
+    const netSales = sumBy(current, 'netSales');
+    const priorSales = sumBy(prior, 'netSales');
+    const guestCount = sumBy(current, 'guestCount');
+    const priorGuests = sumBy(prior, 'guestCount');
+    
+    return {
+      daypart,
+      netSales,
+      salesChange: priorSales > 0 ? ((netSales - priorSales) / priorSales) * 100 : 0,
+      guestCount,
+      guestChange: priorGuests > 0 ? ((guestCount - priorGuests) / priorGuests) * 100 : 0,
+      checkAverage: guestCount > 0 ? netSales / guestCount : 0,
+      percentOfTotal: totalNetSales > 0 ? (netSales / totalNetSales) * 100 : 0,
+    };
+  });
+  
+  // Generate alerts
+  const alerts = [];
+  
+  // Check for significant declines
+  byDaypart.forEach(dp => {
+    if (dp.salesChange < -10) {
+      alerts.push({
+        type: 'decline',
+        severity: dp.salesChange < -20 ? 'high' : 'medium',
+        message: `${dp.daypart} sales down ${Math.abs(dp.salesChange).toFixed(1)}%`,
+        metric: `${dp.daypart}_sales`,
+        value: dp.netSales,
+        change: dp.salesChange,
+      });
+    }
+  });
+  
+  return {
+    summary: {
+      totalNetSales,
+      vsPriorPeriod,
+      vsLastYear: 0, // Would need year-ago data
+      avgDailySales: totalNetSales / differenceInDays(endDate, startDate),
+    },
+    byDaypart,
+    byDayOfWeek: [], // Calculate similarly
+    byChannel: [],   // Calculate from channel breakdown
+    alerts,
+    topDays: [],     // Sort and pick top 5
+    bottomDays: [],  // Sort and pick bottom 5
+  };
+}
+```
+
+### Alert Condition Checking
+
+```typescript
+// ═══════════════════════════════════════════════════════════════
+// ALERT CONDITION CHECKING
+// ═══════════════════════════════════════════════════════════════
+
+interface AlertDefinition {
+  id: string;
+  name: string;
+  metric: string;
+  condition: 'gt' | 'lt' | 'change_gt' | 'change_lt';
+  threshold: number;
+  severity: 'critical' | 'warning' | 'info';
+  suggestedReport: ReportType;
+}
+
+const ALERT_DEFINITIONS: AlertDefinition[] = [
+  {
+    id: 'sales_decline_30d',
+    name: 'Sales Decline',
+    metric: 'net_sales_30d_change',
+    condition: 'change_lt',
+    threshold: -10,  // 10% decline
+    severity: 'warning',
+    suggestedReport: ReportType.SALES_DECLINE_ANALYSIS,
+  },
+  {
+    id: 'labor_percent_high',
+    name: 'Labor % High',
+    metric: 'labor_percent_7d_avg',
+    condition: 'gt',
+    threshold: 35,  // Above 35%
+    severity: 'warning',
+    suggestedReport: ReportType.LABOR_OPTIMIZATION,
+  },
+  {
+    id: 'negative_reviews',
+    name: 'Negative Review Spike',
+    metric: 'negative_reviews_7d',
+    condition: 'gt',
+    threshold: 2,
+    severity: 'critical',
+    suggestedReport: ReportType.REVIEW_RESPONSE_STRATEGY,
+  },
+  {
+    id: 'food_cost_spike',
+    name: 'Food Cost Spike',
+    metric: 'food_cost_percent_change',
+    condition: 'change_gt',
+    threshold: 5,  // 5 point increase
+    severity: 'warning',
+    suggestedReport: ReportType.COST_CONTROL,
+  },
+  {
+    id: 'guest_count_decline',
+    name: 'Traffic Decline',
+    metric: 'guest_count_30d_change',
+    condition: 'change_lt',
+    threshold: -15,
+    severity: 'warning',
+    suggestedReport: ReportType.GUEST_RETENTION,
+  },
+];
+
+async function checkAlertConditions(locationId: string): Promise<AlertConditionsInsight> {
+  const triggeredAlerts = [];
+  const watchList = [];
+  
+  for (const alertDef of ALERT_DEFINITIONS) {
+    const { currentValue, priorValue } = await getMetricValues(
+      locationId, 
+      alertDef.metric
+    );
+    
+    let isTriggered = false;
+    
+    switch (alertDef.condition) {
+      case 'gt':
+        isTriggered = currentValue > alertDef.threshold;
+        break;
+      case 'lt':
+        isTriggered = currentValue < alertDef.threshold;
+        break;
+      case 'change_gt':
+        const changeUp = ((currentValue - priorValue) / priorValue) * 100;
+        isTriggered = changeUp > alertDef.threshold;
+        break;
+      case 'change_lt':
+        const changeDown = ((currentValue - priorValue) / priorValue) * 100;
+        isTriggered = changeDown < alertDef.threshold;
+        break;
+    }
+    
+    if (isTriggered) {
+      triggeredAlerts.push({
+        alertType: alertDef.id,
+        title: alertDef.name,
+        message: generateAlertMessage(alertDef, currentValue),
+        severity: alertDef.severity,
+        metric: alertDef.metric,
+        currentValue,
+        threshold: alertDef.threshold,
+        triggeredAt: new Date().toISOString(),
+        suggestedReport: alertDef.suggestedReport,
+      });
+    } else {
+      // Add to watch list if approaching threshold
+      const percentToThreshold = Math.abs(
+        (currentValue - alertDef.threshold) / alertDef.threshold
+      ) * 100;
+      
+      if (percentToThreshold < 20) {  // Within 20% of threshold
+        watchList.push({
+          metric: alertDef.metric,
+          currentValue,
+          threshold: alertDef.threshold,
+          trend: determineTrend(locationId, alertDef.metric),
+          daysToThreshold: estimateDaysToThreshold(locationId, alertDef),
+        });
+      }
+    }
+  }
+  
+  return { triggeredAlerts, watchList };
+}
+```
+
+---
+
+## Sync Schedules (Updated)
+
+| Data Type | Source | Frequency | Time | Operational Table | Dashboard Table |
+|-----------|--------|-----------|------|-------------------|-----------------|
+| Daypart Sales | Toast | Nightly | 6:00 AM | DaypartMetrics | DailyMetrics |
+| Labor Detail | Toast | Nightly | 6:00 AM | LaborDetail | DailyMetrics |
+| Transactions | Toast | Nightly | 6:00 AM | TransactionSummary | — |
+| Category Sales | Toast | Nightly | 6:00 AM | CategorySales | — |
+| Menu Items | Toast | Weekly | Monday 6:00 AM | MenuItemSales | — |
+| Food Costs | R365 | Nightly | 6:00 AM | — | DailyMetrics |
+| Guest CRM | OpenTable | Nightly | 6:00 AM | Guest, GuestVisit | DailyCustomerMetrics |
+| Reviews | BrightLocal | Daily | 12:00 AM | Review | ReviewSnapshot |
+| Website Visibility | SEMrush | Weekly | Sunday 6:00 AM | KeywordRanking | VisibilitySnapshot |
+| Maps Visibility | BrightLocal | Weekly | Sunday 6:00 AM | KeywordLocalRanking | MapsVisibilitySnapshot |
+| Social Media | Sprout/Metricool | Daily | 7:00 AM | SocialPost | SocialSnapshot |
+| PR Mentions | Manual/Cision | On-demand | — | MediaMention | MediaMentionSnapshot |
+| **Insight Cache** | **Calculated** | **Nightly** | **6:30 AM** | **InsightCache** | **—** |
+| **Alert Check** | **Calculated** | **Nightly** | **6:30 AM** | **InsightCache** | **—** |
+
+---
 
 ```prisma
 model DailyReviews {
@@ -4437,6 +5927,754 @@ POST /api/sync/social
 - Impressions
 - Engagement Rate
 - Post URL
+
+---
+
+## Intelligence Page
+
+### Overview
+
+The Intelligence page is the core differentiator of Prometheus. It transforms raw data into actionable insights using AI-powered analysis combined with 30 years of restaurant industry expertise. Users can run pre-built analyses or ask custom questions.
+
+### Page Location
+
+```
+/dashboard/intelligence
+```
+
+### Value Proposition
+
+```
+Other Dashboards: "Here's your data"
+Prometheus:       "Here's what's wrong and exactly how to fix it"
+```
+
+### Page Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Intelligence                                        5 of 10 runs remaining this month  │
+├────────────────────────┬────────────────────────────────────────────────────────────────┤
+│                        │                                                                │
+│  RECOMMENDED FOR YOU   │  [SELECTED REPORT PREVIEW]                                    │
+│  ──────────────────    │                                                                │
+│  ⚡ Alert-triggered    │  Shows description, data sources, and [Run] button            │
+│     reports            │                                                                │
+│                        │  ────────────────────────────────────────────────────────────  │
+│  AVAILABLE REPORTS     │                                                                │
+│  ──────────────────    │  RECENT ANALYSES                                              │
+│  📊 Category reports   │                                                                │
+│                        │  [List of previously run reports]                             │
+│  CUSTOM                │                                                                │
+│  ──────────────────    │                                                                │
+│  + Ask a question      │                                                                │
+│                        │                                                                │
+└────────────────────────┴────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### No Data / Setup Required State
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Intelligence                                                                            │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                                                                                   │  │
+│  │                        🧠 Connect Your Data First                                │  │
+│  │                                                                                   │  │
+│  │  Intelligence requires data to analyze. Connect at least one data source:       │  │
+│  │                                                                                   │  │
+│  │  ☐ POS System (Toast, Square) — Sales, labor, menu data                        │  │
+│  │  ☐ Reviews (BrightLocal) — Customer feedback                                    │  │
+│  │  ☐ Reservations (OpenTable) — Guest data                                        │  │
+│  │                                                                                   │  │
+│  │                         [Go to Settings →]                                       │  │
+│  │                                                                                   │  │
+│  └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Main Intelligence Interface
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Intelligence                                        5 of 10 runs remaining this month  │
+├────────────────────────┬────────────────────────────────────────────────────────────────┤
+│                        │                                                                │
+│  RECOMMENDED FOR YOU   │  📉 Sales Decline Analysis                                    │
+│  ──────────────────    │                                                                │
+│                        │  Your sales are down 12% vs last month. This analysis will    │
+│  ┌──────────────────┐  │  identify the root causes and provide actionable steps.       │
+│  │ ⚡ Sales Decline │  │                                                                │
+│  │    Analysis      │  │  ┌───────────────────────────────────────────────────────┐    │
+│  │   Sales down 12% │  │  │ Data sources included:                                │    │
+│  │   [Recommended]  │  │  │ ✓ Daily sales (90 days)      ✓ Daypart breakdown      │    │
+│  └──────────────────┘  │  │ ✓ Customer counts            ✓ Menu mix               │    │
+│                        │  │ ✓ Recent reviews (30)        ✓ Labor metrics          │    │
+│  ┌──────────────────┐  │  │ ✓ Weather data               ✓ Local events           │    │
+│  │ ⚠️ Review Crisis │  │  └───────────────────────────────────────────────────────┘    │
+│  │    Response      │  │                                                                │
+│  │   3 negative     │  │  Estimated tokens: ~12,000                                    │
+│  │   pending reply  │  │  Estimated cost: $0.04                                        │
+│  └──────────────────┘  │                                                                │
+│                        │                        [▶ Run Analysis]                       │
+│  AVAILABLE REPORTS     │                                                                │
+│  ──────────────────    │  ────────────────────────────────────────────────────────────  │
+│                        │                                                                │
+│  Sales & Revenue       │  RECENT ANALYSES                                              │
+│  ├─ Sales Trends       │                                                                │
+│  ├─ Channel Mix        │  ┌────────────────────────────────────────────────────────┐   │
+│  └─ Check Analysis     │  │ Jan 20 · Labor Optimization                     ⭐⭐⭐⭐ │   │
+│                        │  │ "Reduce Sunday AM shift by 2 staff, saving $840/mo"   │   │
+│  Menu & Product        │  │ Actions: 2/4 completed                                │   │
+│  ├─ Menu Profitability │  │ [View Full Report]                                     │   │
+│  ├─ Menu Engineering   │  └────────────────────────────────────────────────────────┘   │
+│  └─ Category Trends    │                                                                │
+│                        │  ┌────────────────────────────────────────────────────────┐   │
+│  Labor & Operations    │  │ Jan 15 · Review Response Strategy               ⭐⭐⭐⭐⭐│   │
+│  ├─ Labor Optimization │  │ "Service speed mentioned in 8 negative reviews..."    │   │
+│  ├─ Staffing Recs      │  │ Actions: 3/3 completed ✓                              │   │
+│  └─ Cost Control       │  │ [View Full Report]                                     │   │
+│                        │  └────────────────────────────────────────────────────────┘   │
+│  Marketing & Growth    │                                                                │
+│  ├─ SEO Opportunities  │  ┌────────────────────────────────────────────────────────┐   │
+│  ├─ Content Strategy   │  │ Jan 8 · Sales Decline Analysis                  ⭐⭐⭐  │   │
+│  ├─ Guest Retention    │  │ "Weekend brunch traffic down 23%, 3 reviews cite..."  │   │
+│  └─ Marketing ROI      │  │ Actions: 1/5 completed                                │   │
+│                        │  │ [View Full Report]                                     │   │
+│  CUSTOM                │  └────────────────────────────────────────────────────────┘   │
+│  ──────────────────    │                                                                │
+│  [+ Ask a question]    │  [View All Reports →]                                         │
+│                        │                                                                │
+└────────────────────────┴────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Report Type Definitions
+
+#### Recommended Reports (Triggered by Alerts)
+
+These appear when alert conditions are met:
+
+| Report | Trigger | Severity |
+|--------|---------|----------|
+| Sales Decline Analysis | Sales down >10% vs prior period | ⚡ High |
+| Review Crisis Response | 2+ negative reviews in 7 days | ⚡ High |
+| Labor Alert | Labor % >5 pts above target | ⚠️ Medium |
+| Food Cost Spike | Food cost % up >3 pts | ⚠️ Medium |
+| Traffic Decline | Guest count down >15% | ⚠️ Medium |
+
+#### Available Reports (Always Accessible)
+
+| Category | Report | Description |
+|----------|--------|-------------|
+| **Sales & Revenue** | Sales Trends | Daypart analysis, channel mix, seasonality |
+| | Channel Mix | Dine-in vs takeout vs delivery analysis |
+| | Check Analysis | Check avg trends, party size, upsell opportunities |
+| **Menu & Product** | Menu Profitability | Item-level margin analysis, pricing recommendations |
+| | Menu Engineering | Stars, plowhorses, puzzles, dogs matrix |
+| | Category Trends | Category performance, attach rates |
+| **Labor & Operations** | Labor Optimization | Staffing efficiency, overtime analysis |
+| | Staffing Recommendations | Shift-by-shift staffing suggestions |
+| | Cost Control | Food cost, waste, vendor analysis |
+| **Marketing & Growth** | SEO Opportunities | Keyword gaps, local ranking improvements |
+| | Content Strategy | What to post, when, based on engagement |
+| | Guest Retention | Churn analysis, win-back strategies |
+| | Marketing ROI | Campaign effectiveness analysis |
+
+---
+
+### Report Preview Panel
+
+When a report is selected:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ 📊 Labor Optimization                                                                   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│ Analyze your labor efficiency by daypart and position to identify overstaffed          │
+│ shifts and potential savings opportunities.                                            │
+│                                                                                         │
+│ ┌─ DATA SOURCES ────────────────────────────────────────────────────────────────────┐  │
+│ │                                                                                    │  │
+│ │  ✓ Labor hours by position (90 days)      ✓ Sales by daypart (90 days)           │  │
+│ │  ✓ Overtime records                        ✓ Guest counts by daypart              │  │
+│ │  ✓ Industry benchmarks                     ✓ Your labor % targets                 │  │
+│ │                                                                                    │  │
+│ └────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+│ ┌─ WHAT YOU'LL GET ─────────────────────────────────────────────────────────────────┐  │
+│ │                                                                                    │  │
+│ │  • Identification of overstaffed/understaffed shifts                              │  │
+│ │  • Position-by-position efficiency analysis                                       │  │
+│ │  • Specific scheduling recommendations                                            │  │
+│ │  • Estimated monthly savings                                                      │  │
+│ │  • Comparison to industry benchmarks                                              │  │
+│ │                                                                                    │  │
+│ └────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+│ Estimated tokens: ~14,000                                                              │
+│ Processing time: ~15-30 seconds                                                        │
+│                                                                                         │
+│                              [▶ Run Analysis]                                          │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Running Analysis State
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ 📊 Labor Optimization                                                    [Cancel]      │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│                                                                                         │
+│                              ┌─────────────────────┐                                   │
+│                              │   ◐ Analyzing...    │                                   │
+│                              └─────────────────────┘                                   │
+│                                                                                         │
+│                     Gathering labor data from the past 90 days...                      │
+│                                                                                         │
+│                     ████████████░░░░░░░░░░░░░░░░░░  35%                               │
+│                                                                                         │
+│                     Steps:                                                             │
+│                     ✓ Fetching daypart metrics                                         │
+│                     ✓ Fetching labor detail                                            │
+│                     ◐ Building context for analysis                                    │
+│                     ○ Running AI analysis                                              │
+│                     ○ Generating recommendations                                       │
+│                                                                                         │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Report Output View
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ 📉 Sales Decline Analysis                                    Run: Jan 25, 2025 · 2:34 PM│
+│                                                                                         │
+│ [📥 Download PDF]  [📧 Email to Team]  [🔗 Share Link]               [← Back to List] │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  EXECUTIVE SUMMARY                                                                      │
+│  ───────────────────────────────────────────────────────────────────────────────────── │
+│  Your sales declined 12% ($18,400) in the past 30 days compared to the prior period.   │
+│  Primary factors identified: decreased weekend traffic and lower check averages.       │
+│  Implementing the recommended actions could recover an estimated $5,600/month.         │
+│                                                                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ROOT CAUSES IDENTIFIED                                                     Confidence │
+│  ───────────────────────────────────────────────────────────────────────────────────── │
+│                                                                                         │
+│  ┌─ 1. Weekend Brunch Traffic Down 23% ───────────────────────────────────── HIGH ──┐ │
+│  │                                                                                   │ │
+│  │  • Saturday/Sunday 10am-2pm guest counts dropped from avg 145 to 112            │ │
+│  │  • 3 negative reviews in past 30 days mentioned "long wait times" for brunch    │ │
+│  │  • New competitor (The Breakfast Club) opened 0.5 mi away on Jan 5             │ │
+│  │  • Your brunch check avg remained stable at $42 (not a pricing issue)          │ │
+│  │                                                                                   │ │
+│  └───────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                         │
+│  ┌─ 2. Average Check Down $8.40 ──────────────────────────────────────────── HIGH ──┐ │
+│  │                                                                                   │ │
+│  │  • Dinner check avg dropped from $62 to $53.60 (13.5% decline)                  │ │
+│  │  • Wine sales down 34% ($4,200 less than prior month)                           │ │
+│  │  • Appetizer attach rate dropped from 45% to 31%                                │ │
+│  │  • Dessert attach rate stable at 18% (not contributing to decline)             │ │
+│  │                                                                                   │ │
+│  └───────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                         │
+│  ┌─ 3. Weather Impact (Minor) ────────────────────────────────────────────── LOW ───┐ │
+│  │                                                                                   │ │
+│  │  • 2 severe weather days vs 0 in prior period                                   │ │
+│  │  • Estimated impact: -$1,200 (already factored into above)                      │ │
+│  │                                                                                   │ │
+│  └───────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ACTION PLAN                                                                           │
+│  ───────────────────────────────────────────────────────────────────────────────────── │
+│                                                                                         │
+│  ┌─ IMMEDIATE (This Week) ─────────────────────────────────────────────────────────┐  │
+│  │                                                                      Est. Impact │  │
+│  │  □ 1. Address brunch wait times                                     +$2,400/mo  │  │
+│  │       ├─ Add 1 host during 10am-12pm Saturday/Sunday                            │  │
+│  │       ├─ Implement waitlist texting (saves 15 min perceived wait)              │  │
+│  │       └─ Consider reservations for brunch (currently walk-in only)             │  │
+│  │                                                                                  │  │
+│  │  □ 2. Respond to the 3 negative brunch reviews                      Reputation  │  │
+│  │       └─ [View suggested responses →]                                           │  │
+│  │                                                                                  │  │
+│  └──────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+│  ┌─ SHORT-TERM (Next 2 Weeks) ─────────────────────────────────────────────────────┐  │
+│  │                                                                      Est. Impact │  │
+│  │  □ 3. Boost wine & appetizer sales                                  +$3,200/mo  │  │
+│  │       ├─ Train servers on wine pairing suggestions                              │  │
+│  │       │   [Download training script →]                                          │  │
+│  │       ├─ Add "Start with..." appetizer prompt to server greeting               │  │
+│  │       └─ Consider wine flight special ($18, high margin)                        │  │
+│  │                                                                                  │  │
+│  │  □ 4. Monitor new competitor                                        Strategic   │  │
+│  │       ├─ The Breakfast Club at 123 Main St                                     │  │
+│  │       ├─ Their Google rating: 4.2 (yours: 4.5 ✓)                               │  │
+│  │       └─ Consider "locals" loyalty promo to reinforce retention                │  │
+│  │                                                                                  │  │
+│  └──────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  PROJECTED IMPACT                                                                      │
+│  ───────────────────────────────────────────────────────────────────────────────────── │
+│                                                                                         │
+│  If recommended actions are completed:                                                 │
+│                                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │  Current monthly sales:     $135,000                                            │   │
+│  │  Projected recovery:        +$5,600/month                                       │   │
+│  │  Projected monthly sales:   $140,600                                            │   │
+│  │                                                                                  │   │
+│  │  Timeline to full recovery: 4-6 weeks                                           │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ───────────────────────────────────────────────────────────────────────────────────── │
+│                                                                                         │
+│  Was this analysis helpful?  [👍 Yes]  [👎 No]  [💬 Feedback]                         │
+│                                                                                         │
+│  Actions completed: 0 of 4                          [✓ Mark Actions Complete]         │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Custom Question Interface
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Ask a Custom Question                                           [← Back to Reports]   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                                                                                   │  │
+│  │  Ask anything about your restaurant's performance...                             │  │
+│  │                                                                                   │  │
+│  │  ┌─────────────────────────────────────────────────────────────────────────────┐ │  │
+│  │  │ Why are my Tuesday nights so slow compared to other weekdays?              │ │  │
+│  │  └─────────────────────────────────────────────────────────────────────────────┘ │  │
+│  │                                                                     [Ask →]      │  │
+│  │                                                                                   │  │
+│  └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+│  Example questions:                                                                    │
+│  • "What menu items should I consider removing?"                                       │
+│  • "Am I overstaffed on Sunday mornings?"                                             │
+│  • "How do my labor costs compare to industry benchmarks?"                            │
+│  • "What's causing my average check to decline?"                                      │
+│  • "Which servers are performing best on upsells?"                                    │
+│                                                                                         │
+│  ───────────────────────────────────────────────────────────────────────────────────── │
+│                                                                                         │
+│  Note: Custom questions use 2 credits (vs 1 for standard reports)                     │
+│  Your remaining credits: 5 this month                                                 │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Usage & Limits Display
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Intelligence Usage                                                    January 2025    │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─ YOUR PLAN: PRO ────────────────────────────────────────────────────────────────┐   │
+│  │                                                                                  │   │
+│  │  Monthly Credits: 15                                                            │   │
+│  │  Credits Used: 10                                                               │   │
+│  │  Credits Remaining: 5                                                           │   │
+│  │                                                                                  │   │
+│  │  ████████████████████░░░░░░░░░░  67% used                                      │   │
+│  │                                                                                  │   │
+│  │  Resets: February 1, 2025                                                       │   │
+│  │                                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  Credit Costs:                                                                         │
+│  • Standard report: 1 credit                                                          │
+│  • Custom question: 2 credits                                                         │
+│  • Deep analysis (multi-source): 3 credits                                            │
+│                                                                                         │
+│  [Upgrade to Enterprise for unlimited →]                                              │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Report History View
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Report History                                                      [Export All CSV]  │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  [🔍 Search reports...]  [Type: All ▼]  [Date: Last 30 Days ▼]  [Sort: Newest ▼]      │
+│                                                                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ Jan 25 · Sales Decline Analysis                                          ⭐⭐⭐  │   │
+│  │ "Weekend brunch traffic down 23%, check averages down 13.5%"                    │   │
+│  │ Actions: 1 of 4 completed · Projected impact: +$5,600/mo                        │   │
+│  │ [View] [Download PDF] [Email]                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ Jan 20 · Labor Optimization                                             ⭐⭐⭐⭐ │   │
+│  │ "Sunday AM overstaffed by 2 positions, potential savings $840/mo"               │   │
+│  │ Actions: 2 of 4 completed · Projected impact: +$840/mo                          │   │
+│  │ [View] [Download PDF] [Email]                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ Jan 15 · Review Response Strategy                                       ⭐⭐⭐⭐⭐│   │
+│  │ "Service speed is primary complaint theme (8 mentions)"                         │   │
+│  │ Actions: 3 of 3 completed ✓                                                     │   │
+│  │ [View] [Download PDF] [Email]                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ Jan 8 · Custom Question                                                  ⭐⭐⭐  │   │
+│  │ "Why are dessert sales declining?" — Portion size perception identified        │   │
+│  │ [View] [Download PDF] [Email]                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  Showing 1-4 of 12 reports                              [← Prev]  Page 1 of 3  [Next →]│
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Intelligence Context Building
+
+### How Context is Built for Claude
+
+```typescript
+// ═══════════════════════════════════════════════════════════════
+// INTELLIGENCE CONTEXT BUILDER
+// Assembles the right data for each report type
+// ═══════════════════════════════════════════════════════════════
+
+interface ReportContext {
+  systemPrompt: string;
+  dataContext: Record<string, any>;
+  outputFormat: string;
+}
+
+async function buildReportContext(
+  locationId: string,
+  reportType: ReportType
+): Promise<ReportContext> {
+  
+  // Get pre-calculated insights from cache
+  const salesInsight = await getInsightCache(locationId, 'SALES_TRENDS', 30);
+  const laborInsight = await getInsightCache(locationId, 'LABOR_EFFICIENCY', 30);
+  const menuInsight = await getInsightCache(locationId, 'MENU_MOVERS', 30);
+  const reviewInsight = await getInsightCache(locationId, 'REVIEW_THEMES', 30);
+  const alertInsight = await getInsightCache(locationId, 'ALERT_CONDITIONS', 30);
+  
+  // Get location context
+  const location = await getLocationWithConfig(locationId);
+  
+  // Build context based on report type
+  switch (reportType) {
+    case ReportType.SALES_DECLINE_ANALYSIS:
+      return {
+        systemPrompt: SALES_DECLINE_PROMPT,
+        dataContext: {
+          location: {
+            name: location.name,
+            type: location.restaurantType,
+            avgCovers: location.avgDailyCovers,
+          },
+          salesTrends: salesInsight.data,
+          laborMetrics: {
+            avgLaborPercent: laborInsight.data.summary.avgLaborPercent,
+            byDaypart: laborInsight.data.byDaypart,
+          },
+          menuChanges: {
+            topDeclining: menuInsight.data.topDeclining.slice(0, 10),
+            categoryTrends: menuInsight.data.categoryTrends,
+          },
+          reviews: {
+            summary: reviewInsight.data.summary,
+            negativeThemes: reviewInsight.data.themes.negative,
+          },
+          alerts: alertInsight.data.triggeredAlerts,
+          targets: {
+            laborPercent: location.config.laborPercentTarget,
+            foodCost: location.config.foodCostTarget,
+          },
+        },
+        outputFormat: SALES_DECLINE_OUTPUT_FORMAT,
+      };
+      
+    case ReportType.LABOR_OPTIMIZATION:
+      return {
+        systemPrompt: LABOR_OPTIMIZATION_PROMPT,
+        dataContext: {
+          location: { /* ... */ },
+          laborDetail: laborInsight.data,
+          salesByDaypart: salesInsight.data.byDaypart,
+          industryBenchmarks: await getIndustryBenchmarks(location.restaurantType),
+        },
+        outputFormat: LABOR_OPTIMIZATION_OUTPUT_FORMAT,
+      };
+      
+    // ... other report types
+  }
+}
+```
+
+### System Prompts (Admin-Configurable)
+
+```typescript
+// ═══════════════════════════════════════════════════════════════
+// EXAMPLE SYSTEM PROMPT: Sales Decline Analysis
+// This is where the 30 years of expertise lives
+// ═══════════════════════════════════════════════════════════════
+
+const SALES_DECLINE_PROMPT = `
+You are an expert restaurant consultant with 30 years of experience helping 
+restaurants improve their performance. You've worked with hundreds of 
+restaurants from fine dining to fast casual.
+
+TASK: Analyze the sales decline for this restaurant and provide actionable recommendations.
+
+ANALYSIS APPROACH:
+1. Identify the PRIMARY drivers of the decline (not just symptoms)
+2. Look for interconnected issues (e.g., slow service → bad reviews → fewer guests)
+3. Prioritize by impact and ease of implementation
+4. Be SPECIFIC to THIS restaurant's data - avoid generic advice
+
+ROOT CAUSE ANALYSIS:
+- Compare dayparts to find where the decline is concentrated
+- Check if it's a traffic issue (fewer guests) or a spend issue (lower check avg)
+- Look for correlation with recent reviews (are complaints matching the data?)
+- Consider external factors (weather, competition, seasonality)
+- Check menu item trends for category-level issues
+
+RECOMMENDATIONS MUST BE:
+- Specific and actionable (not "improve service" but "add a host during peak hours")
+- Tied to a measurable outcome ("estimated +$X/month")
+- Categorized by timeline (immediate, short-term, long-term)
+- Realistic for a restaurant to implement
+
+OUTPUT REQUIREMENTS:
+- Executive summary (2-3 sentences, the key finding)
+- Root causes ranked by confidence (High/Medium/Low)
+- Action plan with estimated impact
+- Projected recovery if actions are taken
+
+DO NOT:
+- Recommend "hire a consultant" or "conduct more research"
+- Give generic advice that applies to any restaurant
+- Ignore the data and give textbook answers
+- Suggest massive operational overhauls for small issues
+`;
+```
+
+### Output Format Specification
+
+```typescript
+// ═══════════════════════════════════════════════════════════════
+// STRUCTURED OUTPUT FORMAT
+// Claude returns JSON that gets rendered into the report UI
+// ═══════════════════════════════════════════════════════════════
+
+interface SalesDeclineReport {
+  summary: {
+    headline: string;           // "Sales down 12% driven by weekend brunch decline"
+    totalDecline: number;       // Dollar amount
+    percentDecline: number;     // Percentage
+    primaryFactor: string;      // "Weekend traffic"
+    recoveryEstimate: number;   // Projected $ recovery
+  };
+  
+  rootCauses: Array<{
+    title: string;
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+    description: string;
+    supportingData: Array<{
+      metric: string;
+      value: string;
+    }>;
+    relatedReviews?: string[];  // Relevant review excerpts
+  }>;
+  
+  actionPlan: {
+    immediate: Array<ActionItem>;   // This week
+    shortTerm: Array<ActionItem>;   // 2-4 weeks
+    longTerm?: Array<ActionItem>;   // 1-3 months
+  };
+  
+  projectedImpact: {
+    currentMonthlySales: number;
+    projectedRecovery: number;
+    projectedMonthlySales: number;
+    timelineWeeks: number;
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  };
+  
+  additionalInsights?: string[];    // Other observations
+}
+
+interface ActionItem {
+  id: string;
+  title: string;
+  description: string;
+  subTasks?: string[];
+  estimatedImpact: number | string;  // "$2,400/mo" or "Reputation"
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  resources?: Array<{
+    type: 'script' | 'template' | 'link';
+    title: string;
+    content?: string;
+  }>;
+}
+```
+
+---
+
+## Intelligence API Endpoints
+
+### Reports
+
+```typescript
+// Get available report types for a location
+GET /api/locations/{id}/intelligence/reports
+// Returns: { recommended: [...], available: [...], customEnabled: bool }
+
+// Get report details/preview
+GET /api/locations/{id}/intelligence/reports/{reportType}
+// Returns: { description, dataSources, estimatedTokens, creditCost }
+
+// Run a report
+POST /api/locations/{id}/intelligence/run
+{
+  reportType: ReportType,
+  options?: {
+    includeCompetitors?: boolean,
+    period?: number,  // Days
+  }
+}
+// Returns: { reportId, status: 'processing' }
+
+// Get report status
+GET /api/locations/{id}/intelligence/reports/{reportId}/status
+// Returns: { status: 'processing' | 'complete' | 'failed', progress?: number }
+
+// Get completed report
+GET /api/locations/{id}/intelligence/reports/{reportId}
+// Returns: IntelligenceReport
+
+// Run custom question
+POST /api/locations/{id}/intelligence/ask
+{
+  question: string
+}
+// Returns: { reportId, status: 'processing' }
+```
+
+### History & Management
+
+```typescript
+// Get report history
+GET /api/locations/{id}/intelligence/history
+  ?page=1
+  &pageSize=10
+  &reportType=SALES_DECLINE_ANALYSIS
+  &dateFrom=2025-01-01
+// Returns: { reports: [...], total, page, pageSize }
+
+// Update report (rating, feedback, actions)
+PATCH /api/locations/{id}/intelligence/reports/{reportId}
+{
+  userRating?: number,
+  userFeedback?: string,
+  actionsCompleted?: number,
+  isArchived?: boolean,
+}
+
+// Delete report
+DELETE /api/locations/{id}/intelligence/reports/{reportId}
+
+// Export report as PDF
+GET /api/locations/{id}/intelligence/reports/{reportId}/pdf
+
+// Email report
+POST /api/locations/{id}/intelligence/reports/{reportId}/email
+{
+  recipients: string[],
+  message?: string,
+}
+```
+
+### Usage & Config
+
+```typescript
+// Get usage stats
+GET /api/locations/{id}/intelligence/usage
+// Returns: { used, limit, resetDate, history: [...] }
+
+// Get/update config
+GET /api/locations/{id}/intelligence/config
+PATCH /api/locations/{id}/intelligence/config
+{
+  monthlyRunLimit?: number,
+  emailReports?: boolean,
+  notifyOnAlerts?: boolean,
+  laborPercentTarget?: number,
+  // ...
+}
+```
+
+---
+
+## Intelligence Pricing & Limits
+
+| Plan | Monthly Credits | Credit Cost | Notes |
+|------|----------------|-------------|-------|
+| Starter | 5 | - | Basic reports only |
+| Pro | 15 | $0.03-0.10/report | All reports, custom questions |
+| Enterprise | Unlimited | Volume pricing | Multi-location, API access |
+
+### Credit Costs by Report Type
+
+| Report Type | Credits | Estimated Tokens | Rationale |
+|-------------|---------|------------------|-----------|
+| Standard Report | 1 | ~10-15K | Single-focus analysis |
+| Custom Question | 2 | ~15-20K | Requires more context |
+| Deep Analysis | 3 | ~25-35K | Multi-source, comprehensive |
 
 ---
 
