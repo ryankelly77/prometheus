@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   RefreshCw,
@@ -10,6 +10,8 @@ import {
   XCircle,
   Pencil,
   History,
+  BarChart3,
+  Table2,
 } from 'lucide-react'
 import { useLocation } from '@/hooks/use-location'
 import { formatCurrency } from '@/lib/mock-data'
@@ -38,6 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // Types
 type SyncStatus = 'synced' | 'manual' | 'error' | 'pending'
@@ -150,11 +153,18 @@ function formatDate(dateStr: string): string {
 }
 
 export default function SalesDataPage() {
+  const router = useRouter()
   const { currentLocation, isAllLocations } = useLocation()
   const [currentPeriod, setCurrentPeriod] = useState('2025-01')
   const [periodType, setPeriodType] = useState<'month' | 'quarter' | 'year'>('month')
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const [isResyncing, setIsResyncing] = useState(false)
+
+  const handleTabChange = (value: string) => {
+    if (value === 'charts') {
+      router.push('/dashboard/sales')
+    }
+  }
 
   // Use mock data
   const dailyData = mockDailyData
@@ -250,20 +260,18 @@ export default function SalesDataPage() {
       </div>
 
       {/* View Tabs */}
-      <div className="flex gap-1 border-b">
-        <Link
-          href="/dashboard/sales"
-          className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-        >
-          Charts
-        </Link>
-        <Link
-          href="/dashboard/sales/data"
-          className="border-b-2 border-primary px-4 py-2 text-sm font-medium text-primary"
-        >
-          Data
-        </Link>
-      </div>
+      <Tabs value="data" onValueChange={handleTabChange}>
+        <TabsList className="grid w-full grid-cols-2 max-w-xs">
+          <TabsTrigger value="charts" className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4" />
+            Charts
+          </TabsTrigger>
+          <TabsTrigger value="data" className="flex items-center gap-2">
+            <Table2 className="h-4 w-4" />
+            Data
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       {/* Filters Row */}
       <div className="flex flex-wrap items-center gap-4">
