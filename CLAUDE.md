@@ -299,11 +299,11 @@ npm run build
 
 Update this as you progress:
 
-- [ ] Phase 0: Project Setup
+- [x] Phase 0: Project Setup
 - [ ] Phase 1: Auth & Multi-Tenancy
 - [ ] Phase 2: Database Schema
 - [ ] Phase 3: Design System
-- [ ] Phase 4: Dashboard Layout
+- [x] Phase 4: Dashboard Layout
 - [ ] Phase 5: Charts
 - [ ] Phase 6: Health Score
 - [ ] Phase 7: Settings
