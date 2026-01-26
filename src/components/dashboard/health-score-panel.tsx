@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { Settings2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -232,9 +233,11 @@ export function HealthScorePanel({
 
         {/* Adjust Weights Button */}
         <div className="mt-6 pb-4">
-          <Button variant="outline" className="w-full gap-2">
-            <Settings2 className="h-4 w-4" />
-            Adjust Weights
+          <Button variant="outline" className="w-full gap-2" asChild>
+            <Link href="/dashboard/health-score">
+              <Settings2 className="h-4 w-4" />
+              Adjust Weights
+            </Link>
           </Button>
         </div>
       </SheetContent>
