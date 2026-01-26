@@ -45,6 +45,12 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  DailyReviews          ← Daily review aggregates (calculated)  │
 │  VisibilitySnapshot    ← Monthly website visibility (SEMrush)  │
 │  KeywordRanking        ← Individual keyword tracking           │
+│  MapsVisibilitySnapshot← Monthly maps visibility (BrightLocal) │
+│  LocalSearchGridResult ← Grid check results                    │
+│  KeywordLocalRanking   ← Local keyword positions               │
+│  NAPAudit              ← NAP consistency audits                │
+│  GBPAuditSnapshot      ← GBP optimization audits               │
+│  MapsVisibilityConfig  ← BrightLocal settings per location     │
 │  AIVisibilitySnapshot  ← Monthly AI visibility (Pro plan)      │
 │  PromptTracking        ← AI prompt results (Pro plan)          │
 │  VisibilityConfig      ← SEMrush settings per location         │
@@ -69,6 +75,9 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  - Review charts pull from ReviewSnapshot                      │
 │  - Visibility charts pull from VisibilitySnapshot              │
 │  - Keyword table pulls from KeywordRanking                     │
+│  - Maps grid/charts pull from MapsVisibilitySnapshot           │
+│  - Local rankings table pulls from KeywordLocalRanking         │
+│  - NAP/GBP health pulls from NAPAudit, GBPAuditSnapshot        │
 │  - AI Visibility (Pro) pulls from AIVisibilitySnapshot         │
 │  - Prompt table (Pro) pulls from PromptTracking                │
 │  - PR charts pull from MediaMentionSnapshot                    │
@@ -90,6 +99,10 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 | Guest CRM Data | OpenTable | Nightly | 6:00 AM | Guest, GuestVisit |
 | Reviews | BrightLocal | Daily | 12:00 AM | Review, ReviewSnapshot |
 | Website Visibility | SEMrush | Weekly | Sunday 6:00 AM | VisibilitySnapshot, KeywordRanking |
+| Maps Visibility | BrightLocal | Weekly | Sunday 6:00 AM | MapsVisibilitySnapshot, KeywordLocalRanking |
+| Local Search Grid | BrightLocal | Weekly | Sunday 6:00 AM | LocalSearchGridResult |
+| NAP Audit | BrightLocal | Monthly | 1st of month | NAPAudit |
+| GBP Audit | BrightLocal | Monthly | 1st of month | GBPAuditSnapshot |
 | AI Visibility (Pro) | SEMrush | Weekly | Sunday 6:00 AM | AIVisibilitySnapshot, PromptTracking |
 | PR Mentions | Manual/CSV | On-demand | N/A | MediaMention, MediaMentionSnapshot |
 | PR Mentions (Future) | Cision/Meltwater | Daily | 8:00 AM | MediaMention, MediaMentionSnapshot |
@@ -688,6 +701,319 @@ enum SyncFrequency {
   DAILY
   WEEKLY
   MONTHLY
+}
+```
+
+### MapsVisibilityConfig (BrightLocal Settings per Location)
+
+```prisma
+model MapsVisibilityConfig {
+  id              String   @id @default(cuid())
+  locationId      String   @unique
+  
+  // BrightLocal settings
+  brightLocalLocationId   String?      // BrightLocal location ID
+  brightLocalReportId     String?      // Report ID for data retrieval
+  
+  // Google Business Profile
+  googleBusinessProfileId String?      // GBP ID
+  gbpName                 String?      // Business name as it appears on GBP
+  gbpAddress              String?      // Full address
+  gbpPhone                String?      // Phone number
+  
+  // Grid settings
+  gridCenterLat           Decimal?     @db.Decimal(10, 7)  // Center latitude
+  gridCenterLng           Decimal?     @db.Decimal(10, 7)  // Center longitude
+  gridRadius              Int          @default(5)         // Radius in miles
+  gridSize                Int          @default(5)         // Grid dimension (5x5, 7x7, etc.)
+  
+  // Keywords to track in local search
+  localKeywords           String[]     // e.g., ["restaurants near me", "best brunch san antonio"]
+  
+  // Competitors (up to 4)
+  competitors             Json?        // [{ name, gbpId, address }, ...]
+  
+  // Sync settings
+  lastSyncAt              DateTime?
+  lastGridSyncAt          DateTime?
+  lastNAPAuditAt          DateTime?
+  lastGBPAuditAt          DateTime?
+  syncFrequency           SyncFrequency @default(WEEKLY)
+  
+  location                Location     @relation(fields: [locationId], references: [id])
+  
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+}
+```
+
+### MapsVisibilitySnapshot (Monthly Maps Visibility)
+
+Monthly snapshots of local/maps visibility metrics from BrightLocal.
+
+```prisma
+model MapsVisibilitySnapshot {
+  id              String   @id @default(cuid())
+  locationId      String
+  month           String   // 'YYYY-MM' format
+  
+  // Overall maps visibility
+  mapsVisibilityScore     Decimal  @db.Decimal(5, 2)   // 0-100 score
+  mapsVisibilityChange    Decimal? @db.Decimal(5, 2)   // Change from prior month
+  
+  // Grid-based metrics (average across all keywords)
+  averageGridRank         Decimal? @db.Decimal(4, 2)   // Avg rank across grid points
+  gridCoveragePercent     Decimal? @db.Decimal(5, 2)   // % of grid where ranking in top 20
+  
+  // Local Pack metrics
+  localPackAppearances    Int      @default(0)         // Times appearing in Local Pack
+  localPackAvgPosition    Decimal? @db.Decimal(4, 2)   // Avg position when in Local Pack
+  
+  // Google Maps metrics
+  mapsAvgPosition         Decimal? @db.Decimal(4, 2)   // Avg position in Maps results
+  
+  // Keyword tracking
+  totalKeywordsTracked    Int      @default(0)
+  keywordsInLocalPack     Int      @default(0)         // Keywords where we appear in Pack
+  keywordsInTop3          Int      @default(0)         // Keywords in top 3 Maps
+  keywordsInTop10         Int      @default(0)
+  keywordsInTop20         Int      @default(0)
+  
+  // Competitor comparison
+  competitorAvgRank       Json?    // { "Competitor A": 4.2, "Competitor B": 6.1 }
+  rankVsCompetitors       String?  // "AHEAD", "BEHIND", "TIED"
+  
+  // NAP health
+  napConsistencyScore     Decimal? @db.Decimal(5, 2)   // 0-100
+  napIssuesCount          Int      @default(0)
+  
+  // GBP health
+  gbpOptimizationScore    Decimal? @db.Decimal(5, 2)   // 0-100
+  gbpCompletenessScore    Decimal? @db.Decimal(5, 2)   // 0-100
+  
+  // Targets
+  mapsVisibilityTarget    Decimal? @db.Decimal(5, 2)
+  
+  // Sync metadata
+  syncedAt                DateTime
+  syncStatus              SyncStatus @default(SUCCESS)
+  
+  location                Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, month])
+  @@index([locationId, month])
+}
+```
+
+### LocalSearchGridResult (Grid Check Results)
+
+Results from BrightLocal's Local Search Grid API showing rankings across geographic grid.
+
+```prisma
+model LocalSearchGridResult {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Keyword info
+  keyword             String
+  
+  // Grid configuration at time of check
+  gridCenterLat       Decimal  @db.Decimal(10, 7)
+  gridCenterLng       Decimal  @db.Decimal(10, 7)
+  gridRadius          Int                           // Miles
+  gridSize            Int                           // 5x5, 7x7, etc.
+  
+  // Results
+  checkedAt           DateTime
+  
+  // Grid data - JSON array of grid points with ranks
+  // [{ lat, lng, rank, inLocalPack, competitors: [{name, rank}] }, ...]
+  gridData            Json
+  
+  // Aggregated metrics
+  averageRank         Decimal? @db.Decimal(4, 2)    // Avg across all grid points
+  bestRank            Int?                          // Best position achieved
+  worstRank           Int?                          // Worst position
+  notRankingCount     Int      @default(0)          // Grid points where not ranking
+  inLocalPackCount    Int      @default(0)          // Grid points in Local Pack
+  
+  // Coverage metrics
+  top3Count           Int      @default(0)          // Grid points ranked 1-3
+  top10Count          Int      @default(0)          // Grid points ranked 1-10
+  top20Count          Int      @default(0)          // Grid points ranked 1-20
+  totalGridPoints     Int                           // Total points in grid
+  
+  // Competitor comparison at this check
+  competitorRanks     Json?    // { "Competitor A": { avg: 5.2, best: 1 }, ... }
+  
+  // Screenshot URL (if captured)
+  screenshotUrl       String?
+  
+  // Sync metadata
+  brightLocalCheckId  String?                       // BrightLocal's check ID
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  
+  @@index([locationId, keyword])
+  @@index([locationId, checkedAt])
+}
+```
+
+### KeywordLocalRanking (Per-Keyword Local Rankings)
+
+Individual keyword rankings in local/maps results.
+
+```prisma
+model KeywordLocalRanking {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Keyword info
+  keyword             String
+  searchVolume        Int?         // Monthly local search volume
+  
+  // Current Local Pack position
+  localPackPosition   Int?         // Position in Local Pack (1-3, null if not in pack)
+  inLocalPack         Boolean      @default(false)
+  
+  // Current Google Maps position
+  mapsPosition        Int?         // Position in Maps results
+  
+  // Current Local Finder position
+  localFinderPosition Int?
+  
+  // Position changes
+  previousLocalPackPos    Int?
+  previousMapsPosition    Int?
+  localPackChange         Int?     // Positive = improved
+  mapsChange              Int?
+  
+  // Grid-based rank (average across grid)
+  averageGridRank     Decimal? @db.Decimal(4, 2)
+  gridCoverage        Decimal? @db.Decimal(5, 2)  // % of grid ranking top 20
+  
+  // Competitor positions for this keyword
+  competitorPositions Json?    // { "Competitor A": { localPack: 2, maps: 4 }, ... }
+  
+  // Tracking
+  trackedSince        DateTime
+  lastChecked         DateTime
+  
+  // Sync metadata
+  syncedAt            DateTime
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  @@unique([locationId, keyword])
+  @@index([locationId, localPackPosition])
+  @@index([locationId, mapsPosition])
+}
+```
+
+### NAPAudit (NAP Consistency Tracking)
+
+Track Name, Address, Phone consistency across directories.
+
+```prisma
+model NAPAudit {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Audit date
+  auditedAt           DateTime
+  
+  // Overall scores
+  overallScore        Decimal  @db.Decimal(5, 2)   // 0-100
+  nameScore           Decimal? @db.Decimal(5, 2)
+  addressScore        Decimal? @db.Decimal(5, 2)
+  phoneScore          Decimal? @db.Decimal(5, 2)
+  
+  // Directory results - JSON array
+  // [{ directory, found, nameMatch, addressMatch, phoneMatch, issues[], url }, ...]
+  directoryResults    Json
+  
+  // Counts
+  totalDirectories    Int      @default(0)
+  directoriesFound    Int      @default(0)
+  directoriesCorrect  Int      @default(0)
+  directoriesWithIssues Int    @default(0)
+  
+  // Common issues found
+  issuesSummary       Json?    // { "wrong_phone": 3, "old_address": 2, "missing_listing": 5 }
+  
+  // Priority fixes
+  priorityFixes       Json?    // [{ directory, issue, severity }, ...]
+  
+  // Sync metadata
+  brightLocalAuditId  String?
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  
+  @@index([locationId, auditedAt])
+}
+```
+
+### GBPAuditSnapshot (Google Business Profile Audit)
+
+Track GBP optimization and compare to competitors.
+
+```prisma
+model GBPAuditSnapshot {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Audit date
+  auditedAt           DateTime
+  
+  // Overall scores
+  optimizationScore   Decimal  @db.Decimal(5, 2)   // 0-100 overall
+  completenessScore   Decimal  @db.Decimal(5, 2)   // 0-100 profile completeness
+  
+  // Category scores
+  basicInfoScore      Decimal? @db.Decimal(5, 2)   // Name, category, hours
+  photosScore         Decimal? @db.Decimal(5, 2)   // Photo quantity/quality
+  reviewsScore        Decimal? @db.Decimal(5, 2)   // Review performance
+  postsScore          Decimal? @db.Decimal(5, 2)   // Posting activity
+  qaScore             Decimal? @db.Decimal(5, 2)   // Q&A engagement
+  attributesScore     Decimal? @db.Decimal(5, 2)   // Attributes completion
+  
+  // Profile details
+  photoCount          Int?
+  reviewCount         Int?
+  averageRating       Decimal? @db.Decimal(3, 2)
+  responseRate        Decimal? @db.Decimal(5, 2)
+  postsLast30Days     Int?
+  qaCount             Int?
+  
+  // Detailed audit results
+  auditDetails        Json?    // { category: { score, issues[], recommendations[] }, ... }
+  
+  // Competitor comparison
+  competitorScores    Json?    // { "Competitor A": { optimization: 85, completeness: 90 }, ... }
+  rankVsCompetitors   Int?     // 1 = best, 5 = worst among tracked
+  
+  // Recommendations
+  recommendations     Json?    // [{ priority, category, action, impact }, ...]
+  
+  // Sync metadata
+  brightLocalAuditId  String?
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  
+  @@index([locationId, auditedAt])
 }
 ```
 
@@ -2119,13 +2445,19 @@ The Visibility page shows website SEO performance and AI visibility metrics. Web
 │ Visibility                                                    [Month: January 2025 ▼]   │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                         │
-│  ┌─── WEBSITE VISIBILITY ──────────────────────────────────────────────────────────┐   │
+│  ┌─── WEBSITE VISIBILITY (SEMrush) ───────────────────────────────────────────────┐   │
 │  │                                                                                  │   │
-│  │  [Summary Cards] [Chart] [Keyword Rankings Table]                               │   │
+│  │  [Summary Cards] [Trend Chart] [Keyword Rankings Table]                         │   │
 │  │                                                                                  │   │
 │  └──────────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                         │
-│  ┌─── AI VISIBILITY (PRO) ─────────────────────────────────────────────────────────┐   │
+│  ┌─── MAPS VISIBILITY (BrightLocal) ──────────────────────────────────────────────┐   │
+│  │                                                                                  │   │
+│  │  [Summary Cards] [Search Grid Heatmap] [Local Rankings Table] [NAP/GBP Health] │   │
+│  │                                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── AI VISIBILITY (PRO) ────────────────────────────────────────────────────────┐   │
 │  │                                                                                  │   │
 │  │  [Upgrade Banner OR Pro Content]                                                │   │
 │  │                                                                                  │   │
@@ -2215,6 +2547,200 @@ Position 51-100: █████████████████████
 - Filter by position range (Top 3, Top 10, Top 20, All)
 - Filter by movement (Improved, Declined, New, Lost)
 - Sort by position, change, volume, traffic
+
+---
+
+## Maps Visibility Section (BrightLocal)
+
+Track local search rankings across Google Maps, Local Pack, and Local Finder using BrightLocal's Local Search Grid API.
+
+### Summary Cards
+
+```
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ Maps Visibility  │  │ Local Pack       │  │ Avg Grid Rank    │  │ NAP Health       │
+│     72.5         │  │   12 / 15        │  │      4.2         │  │     94%          │
+│   ▲ +5.2 vs LM   │  │   keywords       │  │   ▲ +0.8 vs LM   │  │   2 issues       │
+│   Target: 80     │  │   ▲ +2 vs LM     │  │   (1 = best)     │  │                  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘
+```
+
+Card definitions:
+- **Maps Visibility Score:** Overall local visibility (0-100)
+- **Local Pack:** Keywords appearing in Local 3-Pack out of total tracked
+- **Avg Grid Rank:** Average position across all grid points for all keywords
+- **NAP Health:** NAP consistency score with issue count
+
+### Local Search Grid Heatmap
+
+Visual grid showing rankings across geographic area. This is the key differentiator — shows exactly WHERE you rank well vs poorly.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Local Search Grid                                    Keyword: [best brunch san antonio ▼] │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│    ┌─────────────────────────────────────────────────────────────────────────┐         │
+│    │                                                                         │         │
+│    │    🟢    🟢    🟡    🟡    🔴       Legend:                             │         │
+│    │     1     2     5     7    15       🟢 Top 3 (Green)                    │         │
+│    │                                     🟡 4-10 (Yellow)                    │         │
+│    │    🟢    🟢    🟢    🟡    🟡       🟠 11-20 (Orange)                   │         │
+│    │     1     1     2     6     8       🔴 21+ or Not Ranking (Red)        │         │
+│    │                                                                         │         │
+│    │    🟢    🟢    ⭐    🟢    🟡       ⭐ Your Location                    │         │
+│    │     2     1    LOC    1     4                                           │         │
+│    │                                                                         │         │
+│    │    🟡    🟢    🟢    🟢    🟡       Grid: 5x5 · Radius: 5 miles        │         │
+│    │     5     2     1     2     6       Avg Rank: 4.2 · Best: 1            │         │
+│    │                                                                         │         │
+│    │    🟡    🟡    🟡    🟡    🟠       Coverage: 80% in Top 10            │         │
+│    │     7     8     6     9    12                                           │         │
+│    │                                                                         │         │
+│    └─────────────────────────────────────────────────────────────────────────┘         │
+│                                                                                         │
+│    [View Full Grid] [Download Screenshot] [Compare to Competitor ▼]                    │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Grid Heatmap Features
+
+- **Keyword selector:** Switch between tracked keywords
+- **Color coding:** Green (1-3), Yellow (4-10), Orange (11-20), Red (21+/not ranking)
+- **Hover on cell:** Shows exact rank, competitors at that location
+- **Click on cell:** Opens detailed SERP for that grid point
+- **Competitor overlay:** Toggle to see competitor's grid for comparison
+
+### Maps Visibility Trend
+
+Line chart showing Maps Visibility Score over 12 months with target line.
+
+### Local Rankings Table
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Local Keyword Rankings                                                      [+ Add Keyword] [Export CSV] │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ [🔍 Search...                    ]  [Position: All ▼]  [Sort: Local Pack ▼]                             │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Keyword                        │ Local Pack │ Maps  │ Change │ Grid Avg │ Coverage │ vs Best Competitor │
+│────────────────────────────────┼────────────┼───────┼────────┼──────────┼──────────┼────────────────────│
+│ best brunch san antonio        │    🥇 1    │   1   │  ● 0   │   4.2    │   80%    │  ▲ Ahead (+2)      │
+│ restaurants near pearl         │    🥈 2    │   3   │  ▲ +1  │   5.8    │   72%    │  ▲ Ahead (+1)      │
+│ craft beer san antonio         │    🥉 3    │   2   │  ▼ -1  │   6.1    │   68%    │  ● Tied            │
+│ fine dining san antonio        │     —      │   8   │  ▲ +3  │   9.4    │   45%    │  ▼ Behind (-2)     │
+│ happy hour downtown sa         │    🥈 2    │   4   │  ● 0   │   7.2    │   58%    │  ▲ Ahead (+1)      │
+│ ...                            │            │       │        │          │          │                    │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Showing 1-10 of 15 keywords                                       [← Prev]  Page 1 of 2  [Next →]      │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Local Rankings Table Columns
+
+| Column | Description | Sortable |
+|--------|-------------|----------|
+| Keyword | Local search keyword | Yes |
+| Local Pack | Position in Local 3-Pack (🥇🥈🥉 or —) | Yes |
+| Maps | Position in Google Maps | Yes |
+| Change | Position change vs last check | Yes |
+| Grid Avg | Average rank across grid points | Yes |
+| Coverage | % of grid ranking in top 10 | Yes |
+| vs Best Competitor | Comparison to top competitor | Filter |
+
+### Row Click → Keyword Detail Drawer
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ ← Back                                        [View Grid] [📸] │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  "best brunch san antonio"                                   │
+│  Last checked: January 24, 2025 at 6:00 AM                   │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  CURRENT RANKINGS                                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐           │
+│  │ Local Pack  │  │ Google Maps │  │ Local Finder│           │
+│  │     🥇 1    │  │      1      │  │      2      │           │
+│  └─────────────┘  └─────────────┘  └─────────────┘           │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  GRID PERFORMANCE                                             │
+│  Average Rank: 4.2    Best: 1    Worst: 15                   │
+│  Grid Points Ranking: 20 of 25 (80%)                         │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ [Mini heatmap visualization]                            │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  COMPETITOR COMPARISON                                        │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Business          │ Pack │ Maps │ Grid Avg │ Coverage   │  │
+│  │───────────────────┼──────┼──────┼──────────┼────────────│  │
+│  │ ⭐ Southerleigh   │  1   │  1   │   4.2    │    80%     │  │
+│  │ Botika            │  3   │  4   │   6.8    │    62%     │  │
+│  │ Cured             │  2   │  2   │   5.1    │    74%     │  │
+│  │ Battalion         │  —   │  7   │   9.2    │    45%     │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  RANKING HISTORY (12 Weeks)                                   │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ [Line chart showing Local Pack + Maps position]         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### NAP & GBP Health Panel
+
+Collapsible panel showing NAP consistency and GBP optimization status.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Profile Health                                            [Run Audit] [Last: Jan 20]   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─── NAP CONSISTENCY ─────────────────────────────────────────────────────────────┐   │
+│  │                                                                                  │   │
+│  │  Overall Score: 94%                                                             │   │
+│  │  ████████████████████████████████████████████████░░░░                           │   │
+│  │                                                                                  │   │
+│  │  Directories Found: 42 of 50 · Correct: 39 · Issues: 3                         │   │
+│  │                                                                                  │   │
+│  │  Issues Found:                                                                  │   │
+│  │  ⚠ Yelp: Old phone number (210-555-0000)                        [Fix →]       │   │
+│  │  ⚠ Foursquare: Missing listing                                   [Claim →]     │   │
+│  │  ⚠ Yellow Pages: Wrong address (123 Old St)                     [Fix →]       │   │
+│  │                                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── GOOGLE BUSINESS PROFILE ─────────────────────────────────────────────────────┐   │
+│  │                                                                                  │   │
+│  │  Optimization Score: 87%           Completeness: 92%                            │   │
+│  │  ████████████████████████████████████████░░░░░░░░                               │   │
+│  │                                                                                  │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐    │   │
+│  │  │ Basic Info │ │   Photos   │ │  Reviews   │ │   Posts    │ │    Q&A     │    │   │
+│  │  │    95%     │ │    82%     │ │    90%     │ │    75%     │ │    88%     │    │   │
+│  │  │     ✓      │ │     ⚠      │ │     ✓      │ │     ⚠      │ │     ✓      │    │   │
+│  │  └────────────┘ └────────────┘ └────────────┘ └────────────┘ └────────────┘    │   │
+│  │                                                                                  │   │
+│  │  Recommendations:                                                               │   │
+│  │  📸 Add 5 more photos to match competitor average                              │   │
+│  │  📝 Post more frequently (competitors avg 3/week, you: 1/week)                 │   │
+│  │                                                                                  │   │
+│  │  vs Competitors: Ranked #2 of 5 tracked                                        │   │
+│  │                                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -2477,6 +3003,162 @@ function calculateAIVisibilityScore(prompts: PromptTracking[]): number {
 
 ---
 
+### Maps Visibility Sync (Weekly - BrightLocal)
+
+**Frequency:** Weekly on Sunday 6:00 AM
+
+**Process:**
+1. For each location with MapsVisibilityConfig:
+   - Call BrightLocal Rankings API for each tracked keyword
+   - Store Local Pack, Google Maps, Local Finder positions
+   - Record competitor positions
+2. For each tracked keyword:
+   - Call BrightLocal Local Search Grid API
+   - Store grid data (rankings at each coordinate)
+   - Calculate coverage metrics
+3. Update KeywordLocalRanking records
+4. Create LocalSearchGridResult entries
+5. Upsert MapsVisibilitySnapshot for current month
+
+**Grid Check Process:**
+```typescript
+async function runGridCheck(location: MapsVisibilityConfig, keyword: string) {
+  const gridConfig = {
+    centerLat: location.gridCenterLat,
+    centerLng: location.gridCenterLng,
+    radius: location.gridRadius, // miles
+    gridSize: location.gridSize, // 5x5, 7x7, etc.
+  };
+  
+  // BrightLocal returns rankings at each grid point
+  const gridResults = await brightLocal.localSearchGrid({
+    keyword,
+    ...gridConfig,
+    competitors: location.competitors,
+  });
+  
+  // Process results
+  const gridData = gridResults.points.map(point => ({
+    lat: point.lat,
+    lng: point.lng,
+    rank: point.rank, // null if not ranking
+    inLocalPack: point.inLocalPack,
+    competitors: point.competitors, // [{ name, rank }]
+  }));
+  
+  // Calculate aggregates
+  const rankedPoints = gridData.filter(p => p.rank !== null);
+  const averageRank = rankedPoints.length > 0 
+    ? rankedPoints.reduce((sum, p) => sum + p.rank, 0) / rankedPoints.length 
+    : null;
+  
+  const top3Count = gridData.filter(p => p.rank && p.rank <= 3).length;
+  const top10Count = gridData.filter(p => p.rank && p.rank <= 10).length;
+  const top20Count = gridData.filter(p => p.rank && p.rank <= 20).length;
+  
+  return {
+    gridData,
+    averageRank,
+    bestRank: Math.min(...rankedPoints.map(p => p.rank)),
+    worstRank: Math.max(...rankedPoints.map(p => p.rank)),
+    notRankingCount: gridData.length - rankedPoints.length,
+    inLocalPackCount: gridData.filter(p => p.inLocalPack).length,
+    top3Count,
+    top10Count,
+    top20Count,
+    totalGridPoints: gridData.length,
+  };
+}
+```
+
+**Maps Visibility Score Calculation:**
+```typescript
+function calculateMapsVisibilityScore(
+  keywords: KeywordLocalRanking[],
+  grids: LocalSearchGridResult[]
+): number {
+  // Weighted score based on:
+  // - Local Pack presence (40%)
+  // - Maps position (30%)
+  // - Grid coverage (30%)
+  
+  let packScore = 0;
+  let mapsScore = 0;
+  let gridScore = 0;
+  
+  for (const kw of keywords) {
+    // Local Pack: 100 points for position 1, 66 for 2, 33 for 3
+    if (kw.localPackPosition) {
+      packScore += Math.max(0, 100 - ((kw.localPackPosition - 1) * 33));
+    }
+    
+    // Maps: 100 points for position 1, decreasing
+    if (kw.mapsPosition) {
+      mapsScore += Math.max(0, 100 - ((kw.mapsPosition - 1) * 5));
+    }
+  }
+  
+  // Grid: Based on top 10 coverage
+  for (const grid of grids) {
+    gridScore += (grid.top10Count / grid.totalGridPoints) * 100;
+  }
+  
+  const maxPack = keywords.length * 100;
+  const maxMaps = keywords.length * 100;
+  const maxGrid = grids.length * 100;
+  
+  const normalizedPack = maxPack > 0 ? (packScore / maxPack) * 40 : 0;
+  const normalizedMaps = maxMaps > 0 ? (mapsScore / maxMaps) * 30 : 0;
+  const normalizedGrid = maxGrid > 0 ? (gridScore / maxGrid) * 30 : 0;
+  
+  return normalizedPack + normalizedMaps + normalizedGrid;
+}
+```
+
+---
+
+### NAP Audit Sync (Monthly - BrightLocal)
+
+**Frequency:** Monthly on 1st of month at 8:00 AM
+
+**Process:**
+1. Call BrightLocal Citation Tracker API
+2. Check NAP consistency across 50+ directories
+3. Flag inconsistencies (wrong phone, old address, missing listing)
+4. Calculate overall NAP score
+5. Create NAPAudit record
+
+**Directories Checked:**
+- Google Business Profile
+- Yelp, TripAdvisor, OpenTable
+- Facebook, Apple Maps, Bing Places
+- Yellow Pages, Superpages, Manta
+- Industry-specific: Zomato, Foursquare, Urbanspoon
+- Local directories
+
+---
+
+### GBP Audit Sync (Monthly - BrightLocal)
+
+**Frequency:** Monthly on 1st of month at 8:00 AM
+
+**Process:**
+1. Call BrightLocal GBP Audit API
+2. Evaluate profile completeness and optimization
+3. Compare to tracked competitors
+4. Generate recommendations
+5. Create GBPAuditSnapshot record
+
+**Audit Categories:**
+- Basic Info (name, category, hours, attributes)
+- Photos (count, quality, recency)
+- Reviews (count, rating, response rate)
+- Posts (frequency, engagement)
+- Q&A (questions answered, engagement)
+- Attributes (completion rate)
+
+---
+
 ## Visibility API Endpoints
 
 ### Website Visibility
@@ -2557,6 +3239,89 @@ POST /api/sync/ai-visibility
 }
 ```
 
+### Maps Visibility (BrightLocal)
+
+```typescript
+// Get maps visibility snapshot for month
+GET /api/locations/{id}/maps-visibility?month=2025-01
+
+// Get local keyword rankings
+GET /api/locations/{id}/local-keywords
+  ?page=1
+  &pageSize=25
+  &search=brunch
+  &localPack=true          // Filter to only Local Pack appearances
+  &sortBy=localPackPosition
+  &sortOrder=asc
+
+// Get single local keyword details
+GET /api/locations/{id}/local-keywords/{keywordId}
+
+// Get grid results for keyword
+GET /api/locations/{id}/local-keywords/{keywordId}/grid
+  ?checkId=latest          // or specific LocalSearchGridResult ID
+
+// Add local keyword to track
+POST /api/locations/{id}/local-keywords
+{
+  keyword: string
+}
+
+// Delete local keyword
+DELETE /api/locations/{id}/local-keywords/{keywordId}
+
+// Get NAP audit history
+GET /api/locations/{id}/nap-audits
+  ?limit=12               // Last 12 audits
+
+// Get single NAP audit details
+GET /api/locations/{id}/nap-audits/{auditId}
+
+// Get latest NAP audit
+GET /api/locations/{id}/nap-audits/latest
+
+// Get GBP audit history
+GET /api/locations/{id}/gbp-audits
+  ?limit=12
+
+// Get single GBP audit details
+GET /api/locations/{id}/gbp-audits/{auditId}
+
+// Get latest GBP audit
+GET /api/locations/{id}/gbp-audits/latest
+
+// Trigger maps visibility sync
+POST /api/sync/maps-visibility
+{
+  locationId: string
+}
+
+// Trigger NAP audit
+POST /api/sync/nap-audit
+{
+  locationId: string
+}
+
+// Trigger GBP audit
+POST /api/sync/gbp-audit
+{
+  locationId: string
+}
+
+// Update maps visibility config
+PATCH /api/locations/{id}/maps-config
+{
+  gridCenterLat?: number,
+  gridCenterLng?: number,
+  gridRadius?: number,      // miles
+  gridSize?: number,        // 5, 7, 9
+  competitors?: Array<{ name: string, gbpId?: string, address?: string }>
+}
+
+// Get competitor comparison
+GET /api/locations/{id}/maps-visibility/competitors?keyword=best+brunch
+```
+
 ---
 
 ## Visibility Data Export
@@ -2584,6 +3349,29 @@ POST /api/sync/ai-visibility
 - Mention Rate
 - Last Checked
 - Category
+
+### Maps Visibility Export (CSV)
+
+- Keyword
+- Local Pack Position
+- Google Maps Position
+- Local Finder Position
+- Position Change
+- Average Grid Rank
+- Grid Coverage (%)
+- Best Competitor
+- Competitor Position
+- Last Checked
+
+### NAP Audit Export (CSV)
+
+- Directory
+- Listing Found
+- Name Match
+- Address Match
+- Phone Match
+- Issues
+- Listing URL
 
 ---
 
