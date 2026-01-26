@@ -24,22 +24,33 @@ export interface Integration {
   name: string
   description: string
   category: 'pos' | 'accounting' | 'reservations' | 'reviews' | 'seo' | 'social'
-  status: 'connected' | 'disconnected' | 'error'
+  connectionType: 'user' | 'managed' | 'choice'
+  status: 'connected' | 'available' | 'active' | 'error'
   lastSyncAt?: string
   errorMessage?: string
   logoUrl: string
+  requiresPro?: boolean
+  poweredBy?: string
 }
 
 export type IntegrationType =
   | 'toast'
   | 'square'
   | 'r365'
+  | 'marginedge'
   | 'opentable'
   | 'resy'
-  | 'brightlocal'
+  | 'tock'
+  | 'brightlocal_reviews'
+  | 'brightlocal_local'
   | 'semrush'
   | 'sprout'
   | 'metricool'
+
+export interface SocialMediaPreference {
+  method: 'managed' | 'byoa'
+  connectedService?: 'metricool' | 'sprout'
+}
 
 export interface TeamMember {
   id: string

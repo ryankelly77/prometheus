@@ -5,6 +5,7 @@ import type {
   TeamMember,
   NotificationPreferences,
   BillingInfo,
+  SocialMediaPreference,
 } from '@/types/settings'
 
 export const mockOrganization: Organization = {
@@ -66,12 +67,16 @@ export const mockLocations: Location[] = [
 ]
 
 export const mockIntegrations: Integration[] = [
+  // === USER CONNECTS ===
+
+  // POS
   {
     id: 'int-1',
     type: 'toast',
     name: 'Toast POS',
     description: 'Sales, labor, menu data',
     category: 'pos',
+    connectionType: 'user',
     status: 'connected',
     lastSyncAt: '2025-01-26T06:00:00Z',
     logoUrl: '/integrations/toast.svg',
@@ -82,77 +87,145 @@ export const mockIntegrations: Integration[] = [
     name: 'Square POS',
     description: 'Sales, inventory, customers',
     category: 'pos',
-    status: 'disconnected',
+    connectionType: 'user',
+    status: 'available',
     logoUrl: '/integrations/square.svg',
   },
+
+  // Accounting
   {
     id: 'int-3',
     type: 'r365',
     name: 'Restaurant365',
     description: 'Food cost, invoices, P&L',
     category: 'accounting',
+    connectionType: 'user',
     status: 'connected',
     lastSyncAt: '2025-01-26T06:00:00Z',
     logoUrl: '/integrations/r365.svg',
   },
   {
     id: 'int-4',
+    type: 'marginedge',
+    name: 'MarginEdge',
+    description: 'Invoice processing, food cost',
+    category: 'accounting',
+    connectionType: 'user',
+    status: 'available',
+    logoUrl: '/integrations/marginedge.svg',
+  },
+
+  // Reservations
+  {
+    id: 'int-5',
     type: 'opentable',
     name: 'OpenTable',
     description: 'Reservations, guest profiles, covers',
     category: 'reservations',
+    connectionType: 'user',
     status: 'connected',
     lastSyncAt: '2025-01-26T06:00:00Z',
     logoUrl: '/integrations/opentable.svg',
   },
   {
-    id: 'int-5',
+    id: 'int-6',
     type: 'resy',
     name: 'Resy',
     description: 'Reservations, guest profiles',
     category: 'reservations',
-    status: 'disconnected',
+    connectionType: 'user',
+    status: 'available',
     logoUrl: '/integrations/resy.svg',
   },
   {
-    id: 'int-6',
-    type: 'brightlocal',
-    name: 'BrightLocal',
-    description: 'Reviews from Google, Yelp, TripAdvisor',
-    category: 'reviews',
-    status: 'connected',
-    lastSyncAt: '2025-01-26T00:00:00Z',
-    logoUrl: '/integrations/brightlocal.svg',
-  },
-  {
     id: 'int-7',
-    type: 'semrush',
-    name: 'SEMrush',
-    description: 'Keyword rankings, website visibility',
-    category: 'seo',
-    status: 'connected',
-    lastSyncAt: '2025-01-19T06:00:00Z',
-    logoUrl: '/integrations/semrush.svg',
+    type: 'tock',
+    name: 'Tock',
+    description: 'Reservations, experiences, prepaid events',
+    category: 'reservations',
+    connectionType: 'user',
+    status: 'available',
+    logoUrl: '/integrations/tock.svg',
   },
+
+  // === MANAGED BY PROMETHEUS (PRO PLAN) ===
+
+  // Reviews
   {
     id: 'int-8',
-    type: 'sprout',
-    name: 'Sprout Social',
-    description: 'Instagram, Facebook, TikTok metrics',
-    category: 'social',
-    status: 'disconnected',
-    logoUrl: '/integrations/sprout.svg',
+    type: 'brightlocal_reviews',
+    name: 'Review Monitoring',
+    description: 'Google, Yelp, TripAdvisor + 80 more sites',
+    category: 'reviews',
+    connectionType: 'managed',
+    status: 'active',
+    lastSyncAt: '2025-01-26T00:00:00Z',
+    logoUrl: '/integrations/brightlocal.svg',
+    requiresPro: true,
+    poweredBy: 'BrightLocal',
   },
+
+  // SEO & Visibility
   {
     id: 'int-9',
+    type: 'semrush',
+    name: 'Search Visibility',
+    description: 'Keyword rankings, local SEO, AI visibility',
+    category: 'seo',
+    connectionType: 'managed',
+    status: 'active',
+    lastSyncAt: '2025-01-19T06:00:00Z',
+    logoUrl: '/integrations/semrush.svg',
+    requiresPro: true,
+    poweredBy: 'SEMrush',
+  },
+  {
+    id: 'int-10',
+    type: 'brightlocal_local',
+    name: 'Local Rankings',
+    description: 'Google Maps rankings, local pack tracking',
+    category: 'seo',
+    connectionType: 'managed',
+    status: 'active',
+    lastSyncAt: '2025-01-26T06:00:00Z',
+    logoUrl: '/integrations/brightlocal.svg',
+    requiresPro: true,
+    poweredBy: 'BrightLocal',
+  },
+
+  // === SOCIAL - USER CHOICE ===
+
+  {
+    id: 'int-11',
     type: 'metricool',
-    name: 'Metricool',
-    description: 'Social media analytics',
+    name: 'Prometheus Social Tracking',
+    description: 'Instagram, Facebook, TikTok metrics',
     category: 'social',
-    status: 'disconnected',
+    connectionType: 'choice',
+    status: 'active',
+    lastSyncAt: '2025-01-26T06:00:00Z',
     logoUrl: '/integrations/metricool.svg',
+    requiresPro: true,
+    poweredBy: 'Metricool',
+  },
+  {
+    id: 'int-12',
+    type: 'sprout',
+    name: 'Sprout Social',
+    description: 'Connect your existing Sprout Social account',
+    category: 'social',
+    connectionType: 'choice',
+    status: 'available',
+    logoUrl: '/integrations/sprout.svg',
+    requiresPro: true,
   },
 ]
+
+// Social media preference
+export const mockSocialPreference: SocialMediaPreference = {
+  method: 'managed',
+  connectedService: 'metricool',
+}
 
 export const mockTeam: TeamMember[] = [
   {
