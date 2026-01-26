@@ -43,6 +43,11 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  ReviewSnapshot        ← Monthly review aggregates             │
 │  ReviewSourceConfig    ← Platform settings per location        │
 │  DailyReviews          ← Daily review aggregates (calculated)  │
+│  VisibilitySnapshot    ← Monthly website visibility (SEMrush)  │
+│  KeywordRanking        ← Individual keyword tracking           │
+│  AIVisibilitySnapshot  ← Monthly AI visibility (Pro plan)      │
+│  PromptTracking        ← AI prompt results (Pro plan)          │
+│  VisibilityConfig      ← SEMrush settings per location         │
 │  Guest                 ← Individual guest CRM data (OpenTable) │
 │  GuestVisit            ← Individual visit records              │
 │  GuestTag              ← Guest tags/labels                     │
@@ -58,6 +63,10 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  - Guest CRM table pulls from Guest + GuestVisit               │
 │  - Reviews table pulls from Review                             │
 │  - Review charts pull from ReviewSnapshot                      │
+│  - Visibility charts pull from VisibilitySnapshot              │
+│  - Keyword table pulls from KeywordRanking                     │
+│  - AI Visibility (Pro) pulls from AIVisibilitySnapshot         │
+│  - Prompt table (Pro) pulls from PromptTracking                │
 │  - Health scores from HealthScoreHistory                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -73,7 +82,8 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 | Guest Frequency | OpenTable | Nightly | 6:00 AM | DailyCustomerMetrics |
 | Guest CRM Data | OpenTable | Nightly | 6:00 AM | Guest, GuestVisit |
 | Reviews | BrightLocal | Daily | 12:00 AM | Review, ReviewSnapshot |
-| Website Visibility | SEMRush | Weekly | Sunday 12:00 AM | MonthlyMetrics |
+| Website Visibility | SEMrush | Weekly | Sunday 6:00 AM | VisibilitySnapshot, KeywordRanking |
+| AI Visibility (Pro) | SEMrush | Weekly | Sunday 6:00 AM | AIVisibilitySnapshot, PromptTracking |
 | PR Mentions | Manual/RSS | Weekly | Monday 6:00 AM | MonthlyMetrics |
 
 ---
@@ -628,6 +638,346 @@ const reviewSourceConfig = {
     color: '#F94877',
     icon: 'foursquare',
     bgColor: '#FEE9EF',
+  },
+  OTHER: {
+    name: 'Other',
+    color: '#6B7280',
+    icon: 'globe',
+    bgColor: '#F3F4F6',
+  },
+};
+```
+
+### VisibilityConfig (SEMrush Settings per Location)
+
+```prisma
+model VisibilityConfig {
+  id              String   @id @default(cuid())
+  locationId      String   @unique
+  
+  // SEMrush project settings
+  semrushProjectId    String?      // SEMrush project ID
+  domain              String?      // Primary domain to track
+  targetKeywords      String[]     // Keywords to track positions for
+  targetLocation      String?      // Geographic target (e.g., "San Antonio, TX")
+  
+  // AI Visibility (Pro plan only)
+  aiVisibilityEnabled Boolean      @default(false)
+  trackedPrompts      String[]     // Prompts to track in AI platforms
+  
+  // Sync settings
+  lastSyncAt          DateTime?
+  syncFrequency       SyncFrequency @default(WEEKLY)
+  
+  location            Location     @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+}
+
+enum SyncFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+```
+
+### VisibilitySnapshot (Monthly Website Visibility)
+
+Monthly snapshots of website visibility metrics from SEMrush.
+
+```prisma
+model VisibilitySnapshot {
+  id              String   @id @default(cuid())
+  locationId      String
+  month           String   // 'YYYY-MM' format
+  
+  // Overall visibility
+  visibilityScore     Decimal  @db.Decimal(5, 2)   // 0-100 score
+  visibilityChange    Decimal? @db.Decimal(5, 2)   // Change from prior month
+  
+  // Traffic estimates
+  estimatedTraffic    Int?                          // Monthly organic traffic estimate
+  trafficChange       Decimal? @db.Decimal(5, 2)   // % change from prior month
+  
+  // Keyword metrics
+  totalKeywordsTracked    Int      @default(0)
+  keywordsInTop3          Int      @default(0)
+  keywordsInTop10         Int      @default(0)
+  keywordsInTop20         Int      @default(0)
+  keywordsInTop50         Int      @default(0)
+  keywordsInTop100        Int      @default(0)
+  
+  // Keyword movement
+  keywordsImproved        Int      @default(0)
+  keywordsDeclined        Int      @default(0)
+  keywordsUnchanged       Int      @default(0)
+  newKeywords             Int      @default(0)
+  lostKeywords            Int      @default(0)
+  
+  // SERP features
+  featuredSnippets        Int      @default(0)
+  localPackAppearances    Int      @default(0)
+  
+  // Domain authority (if available)
+  domainAuthority         Int?
+  
+  // Competitor comparison (JSON for flexibility)
+  competitorData          Json?    // { "competitor1.com": { score: 45, traffic: 5000 }, ... }
+  
+  // Targets
+  visibilityTarget        Decimal? @db.Decimal(5, 2)
+  
+  // Sync metadata
+  syncedAt                DateTime
+  syncStatus              SyncStatus @default(SUCCESS)
+  
+  location                Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, month])
+  @@index([locationId, month])
+}
+```
+
+### KeywordRanking (Individual Keyword Tracking)
+
+Daily/weekly keyword position tracking from SEMrush Position Tracking.
+
+```prisma
+model KeywordRanking {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Keyword info
+  keyword             String
+  searchVolume        Int?         // Monthly search volume
+  keywordDifficulty   Int?         // 0-100 difficulty score
+  
+  // Current position
+  position            Int?         // Current SERP position (null if not ranking)
+  previousPosition    Int?         // Position from last sync
+  positionChange      Int?         // Positive = improved, negative = dropped
+  
+  // URL ranking for this keyword
+  rankingUrl          String?
+  
+  // SERP features
+  hasFeaturedSnippet  Boolean      @default(false)
+  hasLocalPack        Boolean      @default(false)
+  hasSitelinks        Boolean      @default(false)
+  hasKnowledgePanel   Boolean      @default(false)
+  
+  // Traffic estimate for this keyword
+  estimatedClicks     Int?
+  estimatedTraffic    Decimal?     @db.Decimal(10, 2)
+  
+  // CPC data (for value estimation)
+  cpc                 Decimal?     @db.Decimal(6, 2)
+  trafficValue        Decimal?     @db.Decimal(10, 2)  // estimatedTraffic * CPC
+  
+  // Tracking
+  trackedSince        DateTime
+  lastChecked         DateTime
+  
+  // Sync metadata
+  syncedAt            DateTime
+  syncStatus          SyncStatus   @default(SUCCESS)
+  
+  location            Location     @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  
+  @@unique([locationId, keyword])
+  @@index([locationId, position])
+  @@index([locationId, keyword])
+}
+```
+
+### KeywordRankingHistory (Position History)
+
+Historical tracking for trend charts.
+
+```prisma
+model KeywordRankingHistory {
+  id              String   @id @default(cuid())
+  keywordRankingId String
+  
+  date            DateTime @db.Date
+  position        Int?
+  
+  keywordRanking  KeywordRanking @relation(fields: [keywordRankingId], references: [id], onDelete: Cascade)
+  
+  @@unique([keywordRankingId, date])
+  @@index([keywordRankingId, date])
+}
+```
+
+### AIVisibilitySnapshot (Monthly AI Visibility - PRO PLAN)
+
+Monthly snapshots of AI visibility metrics. Only populated for Pro plan locations.
+
+```prisma
+model AIVisibilitySnapshot {
+  id              String   @id @default(cuid())
+  locationId      String
+  month           String   // 'YYYY-MM' format
+  
+  // Overall AI visibility
+  aiVisibilityScore       Decimal  @db.Decimal(5, 2)   // 0-100 score
+  aiVisibilityChange      Decimal? @db.Decimal(5, 2)   // Change from prior month
+  
+  // Brand mentions in AI answers
+  totalBrandMentions      Int      @default(0)
+  brandMentionChange      Int?                          // Change from prior month
+  
+  // Average position in AI responses
+  averagePosition         Decimal? @db.Decimal(4, 2)   // When mentioned, average position
+  
+  // By platform breakdown
+  googleAIMentions        Int      @default(0)
+  googleAIAvgPosition     Decimal? @db.Decimal(4, 2)
+  chatGPTMentions         Int      @default(0)
+  chatGPTAvgPosition      Decimal? @db.Decimal(4, 2)
+  perplexityMentions      Int      @default(0)
+  perplexityAvgPosition   Decimal? @db.Decimal(4, 2)
+  bingCopilotMentions     Int      @default(0)
+  bingCopilotAvgPosition  Decimal? @db.Decimal(4, 2)
+  
+  // Prompt tracking summary
+  totalPromptsTracked     Int      @default(0)
+  promptsWithMention      Int      @default(0)        // Prompts where brand was mentioned
+  mentionRate             Decimal? @db.Decimal(5, 2)  // % of prompts with brand mention
+  
+  // Competitor comparison (JSON)
+  competitorData          Json?    // { "competitor1": { mentions: 15, avgPosition: 2.3 }, ... }
+  
+  // Targets
+  aiVisibilityTarget      Decimal? @db.Decimal(5, 2)
+  
+  // Sync metadata
+  syncedAt                DateTime
+  syncStatus              SyncStatus @default(SUCCESS)
+  
+  location                Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, month])
+  @@index([locationId, month])
+}
+```
+
+### PromptTracking (Individual Prompt Results - PRO PLAN)
+
+Track brand presence for specific prompts across AI platforms.
+
+```prisma
+model PromptTracking {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Prompt info
+  prompt              String       // e.g., "best restaurants in San Antonio"
+  category            String?      // e.g., "Local Discovery", "Menu Items", "Events"
+  
+  // Platform
+  platform            AIPlatform
+  
+  // Latest result
+  brandMentioned      Boolean      @default(false)
+  position            Int?         // Position in AI response (1 = first mentioned)
+  mentionContext      String?      @db.Text  // Snippet of how brand was mentioned
+  responseDate        DateTime?    // When AI response was captured
+  
+  // Historical tracking
+  totalChecks         Int          @default(0)
+  totalMentions       Int          @default(0)
+  mentionRate         Decimal?     @db.Decimal(5, 2)  // % of checks with mention
+  
+  // Competitors mentioned (JSON)
+  competitorsMentioned Json?       // ["competitor1", "competitor2"]
+  
+  // Tracking settings
+  isActive            Boolean      @default(true)
+  checkFrequency      SyncFrequency @default(WEEKLY)
+  
+  // Sync metadata
+  lastCheckedAt       DateTime?
+  syncStatus          SyncStatus   @default(SUCCESS)
+  
+  location            Location     @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  
+  @@unique([locationId, prompt, platform])
+  @@index([locationId, platform])
+  @@index([locationId, brandMentioned])
+}
+
+enum AIPlatform {
+  GOOGLE_AI
+  CHATGPT
+  PERPLEXITY
+  BING_COPILOT
+  CLAUDE
+  OTHER
+}
+```
+
+### PromptTrackingHistory (Prompt Check History - PRO PLAN)
+
+Historical record of each prompt check for trend analysis.
+
+```prisma
+model PromptTrackingHistory {
+  id                  String   @id @default(cuid())
+  promptTrackingId    String
+  
+  checkedAt           DateTime
+  brandMentioned      Boolean
+  position            Int?
+  mentionContext      String?  @db.Text
+  fullResponse        String?  @db.Text  // Full AI response (optional, for analysis)
+  
+  promptTracking      PromptTracking @relation(fields: [promptTrackingId], references: [id], onDelete: Cascade)
+  
+  @@index([promptTrackingId, checkedAt])
+}
+```
+
+### AI Platform Display Config
+
+```typescript
+const aiPlatformConfig = {
+  GOOGLE_AI: {
+    name: 'Google AI',
+    color: '#4285F4',
+    icon: 'google',
+    bgColor: '#E8F0FE',
+  },
+  CHATGPT: {
+    name: 'ChatGPT',
+    color: '#10A37F',
+    icon: 'openai',
+    bgColor: '#E6F4F1',
+  },
+  PERPLEXITY: {
+    name: 'Perplexity',
+    color: '#1FB8CD',
+    icon: 'search',
+    bgColor: '#E5F6F8',
+  },
+  BING_COPILOT: {
+    name: 'Bing Copilot',
+    color: '#00BCF2',
+    icon: 'microsoft',
+    bgColor: '#E5F7FC',
+  },
+  CLAUDE: {
+    name: 'Claude',
+    color: '#D97757',
+    icon: 'bot',
+    bgColor: '#FCF0EC',
   },
   OTHER: {
     name: 'Other',
@@ -1388,6 +1738,493 @@ Export to CSV includes:
 - Response Date
 - Status
 - Internal Notes
+
+---
+
+## Visibility Page (SEMrush)
+
+### Overview
+
+The Visibility page shows website SEO performance and AI visibility metrics. Website visibility is available on all plans; AI visibility requires Pro plan.
+
+### Page Location
+
+```
+/dashboard/visibility
+```
+
+### Page Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Visibility                                                    [Month: January 2025 ▼]   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─── WEBSITE VISIBILITY ──────────────────────────────────────────────────────────┐   │
+│  │                                                                                  │   │
+│  │  [Summary Cards] [Chart] [Keyword Rankings Table]                               │   │
+│  │                                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── AI VISIBILITY (PRO) ─────────────────────────────────────────────────────────┐   │
+│  │                                                                                  │   │
+│  │  [Upgrade Banner OR Pro Content]                                                │   │
+│  │                                                                                  │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Website Visibility Section (All Plans)
+
+### Summary Cards
+
+```
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ Visibility Score │  │ Est. Traffic     │  │ Keywords Tracked │  │ Top 10 Keywords  │
+│      68.5        │  │     2,450        │  │       156        │  │       23         │
+│   ▲ +3.2 vs LM   │  │   ▲ +12% vs LM   │  │   ▲ +8 new       │  │   ▲ +4 vs LM     │
+│   Target: 75     │  │                  │  │                  │  │                  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘
+```
+
+### Visibility Score Trend Chart
+
+12-month line chart showing:
+- Visibility Score (primary line)
+- Target line (dashed)
+- Health score box below
+
+### Keyword Rankings Distribution
+
+Horizontal stacked bar or grouped bar showing keyword position distribution:
+
+```
+Position 1-3:    ████████░░░░░░░░░░░░░░░░░░  12 keywords
+Position 4-10:   ████████████░░░░░░░░░░░░░░  23 keywords  
+Position 11-20:  ████████████████░░░░░░░░░░  34 keywords
+Position 21-50:  ██████████████████████░░░░  45 keywords
+Position 51-100: ████████████████████████░░  42 keywords
+```
+
+### Keyword Movement Summary
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Keyword Movement (vs. Last Month)                              │
+├────────────────────────────────────────────────────────────────┤
+│  ▲ Improved: 34    ▼ Declined: 18    ● Unchanged: 104         │
+│  ✚ New: 8          ✕ Lost: 2                                   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Top Keywords Table
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Top Keywords                                                     [View All] [Export CSV] │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ Keyword                        │ Position │ Change │ Volume │ Traffic │ URL             │
+│────────────────────────────────┼──────────┼────────┼────────┼─────────┼─────────────────│
+│ san antonio restaurants        │    3     │  ▲ +2  │ 12,100 │   890   │ /               │
+│ best brunch san antonio        │    5     │  ▲ +1  │  4,400 │   312   │ /brunch         │
+│ craft beer san antonio         │    7     │  ● 0   │  2,900 │   145   │ /beer           │
+│ southerleigh restaurant        │    1     │  ● 0   │  1,200 │   720   │ /               │
+│ pearl district dining          │   12     │  ▼ -3  │  1,800 │    45   │ /location       │
+│ ...                            │          │        │        │         │                 │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ Showing 1-10 of 156 keywords                          [← Prev]  Page 1 of 16  [Next →] │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Keyword Table Columns
+
+| Column | Description | Sortable |
+|--------|-------------|----------|
+| Keyword | Target keyword | Yes |
+| Position | Current SERP position | Yes (default asc) |
+| Change | Position change vs last sync | Yes |
+| Volume | Monthly search volume | Yes |
+| Traffic | Estimated monthly clicks | Yes |
+| URL | Page ranking for keyword | No |
+
+### Keyword Table Filters
+
+- Search by keyword
+- Filter by position range (Top 3, Top 10, Top 20, All)
+- Filter by movement (Improved, Declined, New, Lost)
+- Sort by position, change, volume, traffic
+
+---
+
+## AI Visibility Section (PRO PLAN)
+
+### Non-Pro Users: Upgrade Banner
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                           🤖 AI Visibility                                        │  │
+│  │                                                                                   │  │
+│  │  Track your brand's presence in AI-generated answers from Google AI,             │  │
+│  │  ChatGPT, Perplexity, and more.                                                  │  │
+│  │                                                                                   │  │
+│  │  • See when and how AI mentions your restaurant                                  │  │
+│  │  • Track specific prompts like "best brunch in San Antonio"                      │  │
+│  │  • Compare your AI visibility to competitors                                     │  │
+│  │                                                                                   │  │
+│  │                        [Upgrade to Pro →]                                        │  │
+│  │                                                                                   │  │
+│  └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
+│  │ [Blurred/Greyed preview of AI Visibility charts with sample data]               │    │
+│  └─────────────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pro Users: AI Visibility Dashboard
+
+#### Summary Cards
+
+```
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ AI Visibility    │  │ Brand Mentions   │  │ Avg. Position    │  │ Prompts Tracked  │
+│     42.5         │  │       28         │  │      2.3         │  │       15         │
+│   ▲ +8.2 vs LM   │  │   ▲ +12 vs LM    │  │   ▲ +0.4 vs LM   │  │   ▲ +3 new       │
+│   Target: 50     │  │                  │  │   (1 = best)     │  │                  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘
+```
+
+#### AI Visibility Score Trend
+
+12-month line chart showing AI Visibility Score over time.
+
+#### Brand Mentions by Platform
+
+Donut or horizontal bar chart:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Brand Mentions by Platform                                     │
+├────────────────────────────────────────────────────────────────┤
+│  Google AI:     ████████████████████░░░░░░  18 mentions (64%)  │
+│  ChatGPT:       ████████░░░░░░░░░░░░░░░░░░   6 mentions (21%)  │
+│  Perplexity:    ███░░░░░░░░░░░░░░░░░░░░░░░   3 mentions (11%)  │
+│  Bing Copilot:  █░░░░░░░░░░░░░░░░░░░░░░░░░   1 mention  (4%)   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+#### Prompt Tracking Table
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Tracked Prompts                                                        [+ Add Prompt] [Export CSV] │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Prompt                              │ Platform   │ Mentioned │ Position │ Last Check │ Mention Rate │
+│─────────────────────────────────────┼────────────┼───────────┼──────────┼────────────┼──────────────│
+│ best restaurants in san antonio    │ Google AI  │    ✓      │    2     │ Jan 24     │     85%      │
+│ best restaurants in san antonio    │ ChatGPT    │    ✓      │    3     │ Jan 24     │     72%      │
+│ best brunch san antonio            │ Google AI  │    ✓      │    1     │ Jan 24     │     90%      │
+│ best brunch san antonio            │ Perplexity │    ✗      │    -     │ Jan 24     │     45%      │
+│ craft beer near pearl district     │ Google AI  │    ✓      │    1     │ Jan 24     │     95%      │
+│ romantic dinner san antonio        │ ChatGPT    │    ✗      │    -     │ Jan 24     │     30%      │
+│ ...                                │            │           │          │            │              │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Showing 1-10 of 15 prompts                                      [← Prev]  Page 1 of 2  [Next →]    │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Prompt Table Columns
+
+| Column | Description | Sortable |
+|--------|-------------|----------|
+| Prompt | The search prompt being tracked | Yes |
+| Platform | AI platform (Google AI, ChatGPT, etc.) | Filter |
+| Mentioned | Was brand mentioned in latest check | Filter |
+| Position | Position in AI response (1 = first) | Yes |
+| Last Check | Date of last check | Yes |
+| Mention Rate | % of checks where brand was mentioned | Yes |
+
+#### Row Click → Prompt Detail Drawer
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ ← Back                                        [Edit] [Delete]  │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  "best restaurants in san antonio"                            │
+│  Platform: Google AI                                          │
+│  Category: Local Discovery                                    │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  LATEST RESULT                                                │
+│  Checked: January 24, 2025 at 6:00 AM                        │
+│                                                               │
+│  ✓ Brand Mentioned · Position: 2                             │
+│                                                               │
+│  Mention Context:                                             │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ "...For upscale dining, Southerleigh Fine Food & Brewery│  │
+│  │ in the Pearl District offers craft beers brewed on-site │  │
+│  │ alongside refined Southern cuisine..."                   │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Competitors Also Mentioned:                                  │
+│  • Botika (Position 1)                                       │
+│  • Cured (Position 3)                                        │
+│  • Battalion (Position 4)                                    │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  HISTORY (Last 12 Checks)                                     │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Jan 24  ✓ Pos 2  │  Jan 17  ✓ Pos 2  │  Jan 10  ✓ Pos 3 │  │
+│  │ Jan 03  ✓ Pos 3  │  Dec 27  ✗ -      │  Dec 20  ✓ Pos 4 │  │
+│  │ Dec 13  ✓ Pos 3  │  Dec 06  ✓ Pos 2  │  Nov 29  ✗ -     │  │
+│  │ Nov 22  ✓ Pos 2  │  Nov 15  ✓ Pos 1  │  Nov 08  ✓ Pos 2 │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Mention Rate: 85% (10 of 12 checks)                         │
+│  Average Position: 2.4                                        │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Add Prompt Modal
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Add Tracked Prompt                                    [✕]     │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Prompt:                                                      │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ best happy hour san antonio                             │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Platforms to Track:                                          │
+│  ☑ Google AI                                                 │
+│  ☑ ChatGPT                                                   │
+│  ☐ Perplexity                                                │
+│  ☐ Bing Copilot                                              │
+│                                                               │
+│  Category (optional):                                         │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Happy Hour / Drinks                              [▼]    │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Check Frequency:                                             │
+│  ○ Daily   ● Weekly   ○ Monthly                              │
+│                                                               │
+│                              [Cancel]  [Add Prompt]           │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Visibility Sync Logic
+
+### Website Visibility Sync (Weekly)
+
+**Frequency:** Weekly on Sunday 6:00 AM
+
+**Process:**
+1. Call SEMrush Position Tracking API
+2. Fetch latest keyword positions for all tracked keywords
+3. Calculate visibility score based on positions and search volumes
+4. Update KeywordRanking records
+5. Create KeywordRankingHistory entries
+6. Upsert VisibilitySnapshot for current month
+
+**Visibility Score Calculation:**
+```typescript
+function calculateVisibilityScore(keywords: KeywordRanking[]): number {
+  // SEMrush-style visibility calculation
+  // Based on CTR curves and search volume
+  
+  const ctrByPosition: Record<number, number> = {
+    1: 0.316,  // Position 1 gets ~31.6% CTR
+    2: 0.158,
+    3: 0.106,
+    4: 0.078,
+    5: 0.063,
+    6: 0.051,
+    7: 0.044,
+    8: 0.038,
+    9: 0.034,
+    10: 0.031,
+    // Positions 11+ get progressively lower
+  };
+  
+  let totalPossibleTraffic = 0;
+  let estimatedTraffic = 0;
+  
+  for (const keyword of keywords) {
+    const volume = keyword.searchVolume || 0;
+    totalPossibleTraffic += volume * 0.316; // Max possible (position 1)
+    
+    if (keyword.position && keyword.position <= 100) {
+      const ctr = ctrByPosition[keyword.position] || 0.01;
+      estimatedTraffic += volume * ctr;
+    }
+  }
+  
+  // Score is percentage of maximum possible traffic
+  return totalPossibleTraffic > 0 
+    ? (estimatedTraffic / totalPossibleTraffic) * 100 
+    : 0;
+}
+```
+
+### AI Visibility Sync (Weekly - Pro Only)
+
+**Frequency:** Weekly on Sunday 6:00 AM (after website visibility)
+
+**Process:**
+1. Skip if location is not Pro plan
+2. For each tracked prompt in PromptTracking:
+   - Call SEMrush AI Visibility API (or custom prompt checker)
+   - Parse AI response for brand mentions
+   - Record position if mentioned
+   - Store mention context snippet
+3. Create PromptTrackingHistory entries
+4. Upsert AIVisibilitySnapshot for current month
+
+**AI Visibility Score Calculation:**
+```typescript
+function calculateAIVisibilityScore(prompts: PromptTracking[]): number {
+  // Score based on mention rate and position
+  
+  let totalScore = 0;
+  let maxScore = 0;
+  
+  for (const prompt of prompts) {
+    maxScore += 100; // Each prompt worth up to 100 points
+    
+    if (prompt.brandMentioned && prompt.position) {
+      // Position 1 = 100 points, Position 5 = 60 points, etc.
+      const positionScore = Math.max(0, 120 - (prompt.position * 20));
+      totalScore += positionScore;
+    }
+  }
+  
+  return maxScore > 0 ? (totalScore / maxScore) * 100 : 0;
+}
+```
+
+---
+
+## Visibility API Endpoints
+
+### Website Visibility
+
+```typescript
+// Get visibility snapshot for month
+GET /api/locations/{id}/visibility?month=2025-01
+
+// Get keyword rankings
+GET /api/locations/{id}/keywords
+  ?page=1
+  &pageSize=25
+  &search=brunch
+  &positionRange=1-10       // "1-3", "4-10", "11-20", "21-50", "51-100", "all"
+  &movement=improved        // "improved", "declined", "new", "lost", "unchanged"
+  &sortBy=position
+  &sortOrder=asc
+
+// Get single keyword with history
+GET /api/locations/{id}/keywords/{keywordId}
+
+// Add keyword to track
+POST /api/locations/{id}/keywords
+{
+  keyword: "best tacos san antonio"
+}
+
+// Remove keyword from tracking
+DELETE /api/locations/{id}/keywords/{keywordId}
+
+// Trigger visibility sync
+POST /api/sync/visibility
+{
+  locationId: string
+}
+```
+
+### AI Visibility (Pro)
+
+```typescript
+// Get AI visibility snapshot for month
+GET /api/locations/{id}/ai-visibility?month=2025-01
+
+// Get tracked prompts
+GET /api/locations/{id}/prompts
+  ?page=1
+  &pageSize=25
+  &platform=GOOGLE_AI
+  &mentioned=true
+  &sortBy=mentionRate
+  &sortOrder=desc
+
+// Get single prompt with history
+GET /api/locations/{id}/prompts/{promptId}
+
+// Add prompt to track
+POST /api/locations/{id}/prompts
+{
+  prompt: "best happy hour san antonio",
+  platforms: ["GOOGLE_AI", "CHATGPT"],
+  category: "Happy Hour",
+  checkFrequency: "WEEKLY"
+}
+
+// Update prompt
+PATCH /api/locations/{id}/prompts/{promptId}
+{
+  isActive: false
+}
+
+// Delete prompt
+DELETE /api/locations/{id}/prompts/{promptId}
+
+// Trigger AI visibility sync (Pro only)
+POST /api/sync/ai-visibility
+{
+  locationId: string
+}
+```
+
+---
+
+## Visibility Data Export
+
+### Website Visibility Export (CSV)
+
+- Keyword
+- Current Position
+- Previous Position
+- Position Change
+- Search Volume
+- Estimated Traffic
+- Traffic Value
+- Ranking URL
+- Has Featured Snippet
+- Tracked Since
+
+### AI Visibility Export (CSV - Pro)
+
+- Prompt
+- Platform
+- Brand Mentioned
+- Position
+- Mention Context
+- Mention Rate
+- Last Checked
+- Category
 
 ---
 
