@@ -250,4 +250,85 @@ export const pageContexts: Record<string, PageContext> = {
       'Webhook notifications',
     ],
   },
+  '/dashboard/settings?tab=account': {
+    title: 'Account Settings',
+    description:
+      'Manage your profile, organization details, and security settings including password changes.',
+    dataSources: [],
+    demoNote: 'Changes here affect your login credentials and profile information displayed throughout the app.',
+    comingSoon: [
+      'Two-factor authentication',
+      'Social login (Google, Microsoft)',
+      'Session management',
+    ],
+  },
+  '/dashboard/settings?tab=locations': {
+    title: 'Location Settings',
+    description:
+      'Manage your restaurant locations. Each location can have its own integrations, targets, and team access.',
+    dataSources: [],
+    demoNote: 'Set a default location to determine which data shows when you first log in.',
+    comingSoon: [
+      'Location groups for multi-concept operators',
+      'Bulk import locations from CSV',
+      'Location-specific branding',
+    ],
+  },
+  '/dashboard/settings?tab=integrations': {
+    title: 'Integrations',
+    description:
+      'Connect your data sources to power the dashboard. We pull data automatically once connected.',
+    dataSources: [
+      { name: 'POS', source: 'Toast, Square' },
+      { name: 'Accounting', source: 'Restaurant365' },
+      { name: 'Reservations', source: 'OpenTable, Resy' },
+      { name: 'Reviews', source: 'BrightLocal' },
+      { name: 'SEO', source: 'SEMrush' },
+    ],
+    demoNote: 'During onboarding, we help you connect each integration via secure OAuth flows.',
+    comingSoon: [
+      'TouchBistro POS',
+      'Aloha POS',
+      'QuickBooks integration',
+      'Custom API webhooks',
+    ],
+  },
+  '/dashboard/settings?tab=team': {
+    title: 'Team Settings',
+    description:
+      'Manage who has access to your organization. Assign roles and restrict access to specific locations.',
+    dataSources: [],
+    demoNote: 'Roles determine what actions users can take. Managers can only see their assigned locations.',
+    comingSoon: [
+      'Role customization',
+      'Audit log of team actions',
+      'Bulk user import',
+    ],
+  },
+  '/dashboard/settings?tab=notifications': {
+    title: 'Notification Settings',
+    description:
+      'Configure email notifications and alert thresholds. Get notified about what matters most.',
+    dataSources: [],
+    demoNote: 'Set thresholds based on your specific targets. Weekly digests summarize the prior week every Monday.',
+    comingSoon: [
+      'SMS notifications',
+      'Slack integration',
+      'Custom alert rules',
+      'Digest frequency options',
+    ],
+  },
+  '/dashboard/settings?tab=billing': {
+    title: 'Billing',
+    description:
+      'Manage your subscription, payment method, and view billing history.',
+    dataSources: [],
+    demoNote: 'Contact support to change your plan or cancel. We process payments securely via Stripe.',
+    comingSoon: [
+      'Self-service plan changes',
+      'Annual billing discount',
+      'Multiple payment methods',
+      'Usage-based add-ons',
+    ],
+  },
 }

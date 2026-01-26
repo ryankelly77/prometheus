@@ -3,6 +3,7 @@
 import { Sidebar, TopBar, MobileNav } from '@/components/navigation'
 import { LocationProvider } from '@/hooks/use-location'
 import { DemoProvider, DemoBanner, WalkthroughPanel, FeedbackModal } from '@/components/demo'
+import { Toaster } from '@/components/ui/toaster'
 import { mockLocations } from '@/lib/mock-data'
 
 export default function DashboardLayout({
@@ -40,6 +41,9 @@ export default function DashboardLayout({
 
         {/* Feedback Modal */}
         <FeedbackModal />
+
+        {/* Toast Notifications */}
+        <Toaster />
       </DemoProvider>
     </LocationProvider>
   )
