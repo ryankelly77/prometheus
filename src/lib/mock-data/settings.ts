@@ -264,10 +264,10 @@ export const mockTeam: TeamMember[] = [
 ]
 
 export const mockNotificationPreferences: NotificationPreferences = {
-  weeklyDigest: true,
-  intelligenceAlerts: true,
-  newReviews: true,
-  syncFailures: true,
+  weeklyDigest: { email: true, sms: false },
+  intelligenceAlerts: { email: true, sms: true },
+  newReviews: { email: true, sms: false },
+  syncFailures: { email: true, sms: false },
   salesDeclineThreshold: 10,
   salesDeclineComparison: 'year',
   laborCostThreshold: 35,

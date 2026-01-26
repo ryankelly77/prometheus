@@ -63,10 +63,10 @@ export interface TeamMember {
 }
 
 export interface NotificationPreferences {
-  weeklyDigest: boolean
-  intelligenceAlerts: boolean
-  newReviews: boolean
-  syncFailures: boolean
+  weeklyDigest: { email: boolean; sms: boolean }
+  intelligenceAlerts: { email: boolean; sms: boolean }
+  newReviews: { email: boolean; sms: boolean }
+  syncFailures: { email: boolean; sms: boolean }
   salesDeclineThreshold: number
   salesDeclineComparison: 'week' | 'year'
   laborCostThreshold: number

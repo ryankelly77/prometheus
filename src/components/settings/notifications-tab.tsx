@@ -15,11 +15,53 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { useToast } from '@/hooks/use-toast'
 import { mockNotificationPreferences } from '@/lib/mock-data/settings'
+import type { NotificationPreferences } from '@/types/settings'
+
+type NotificationKey = 'weeklyDigest' | 'intelligenceAlerts' | 'newReviews' | 'syncFailures'
+
+interface NotificationRow {
+  key: NotificationKey
+  label: string
+  description: string
+}
+
+const notificationRows: NotificationRow[] = [
+  {
+    key: 'weeklyDigest',
+    label: 'Weekly Digest',
+    description: 'Summary of KPIs and trends every Monday morning',
+  },
+  {
+    key: 'intelligenceAlerts',
+    label: 'Intelligence Alerts',
+    description: 'Get notified when Intelligence detects issues',
+  },
+  {
+    key: 'newReviews',
+    label: 'New Reviews',
+    description: 'Get notified when new reviews are received',
+  },
+  {
+    key: 'syncFailures',
+    label: 'Sync Failures',
+    description: 'Get notified when data sync fails',
+  },
+]
 
 export function NotificationsTab() {
   const { toast } = useToast()
-  const [preferences, setPreferences] = useState(mockNotificationPreferences)
+  const [preferences, setPreferences] = useState<NotificationPreferences>(mockNotificationPreferences)
   const [isSaving, setIsSaving] = useState(false)
+
+  const handleToggle = (key: NotificationKey, channel: 'email' | 'sms', checked: boolean) => {
+    setPreferences({
+      ...preferences,
+      [key]: {
+        ...preferences[key],
+        [channel]: checked,
+      },
+    })
+  }
 
   const handleSave = async () => {
     setIsSaving(true)
@@ -33,77 +75,44 @@ export function NotificationsTab() {
 
   return (
     <div className="space-y-6">
-      {/* Email Notifications */}
+      {/* Notifications */}
       <Card>
         <CardHeader>
-          <CardTitle>Email Notifications</CardTitle>
+          <CardTitle>Notifications</CardTitle>
           <CardDescription>
-            Choose which emails you&apos;d like to receive.
+            Choose how you&apos;d like to receive notifications.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="weekly-digest">Weekly Digest</Label>
-              <p className="text-sm text-muted-foreground">
-                Summary of KPIs and trends every Monday morning
-              </p>
-            </div>
-            <Switch
-              id="weekly-digest"
-              checked={preferences.weeklyDigest}
-              onCheckedChange={(checked) =>
-                setPreferences({ ...preferences, weeklyDigest: checked })
-              }
-            />
+        <CardContent>
+          {/* Header Row */}
+          <div className="grid grid-cols-[1fr,80px,80px] gap-4 pb-4 border-b mb-4">
+            <div />
+            <div className="text-center text-sm font-medium text-muted-foreground">Email</div>
+            <div className="text-center text-sm font-medium text-muted-foreground">SMS</div>
           </div>
 
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="intelligence-alerts">Intelligence Alerts</Label>
-              <p className="text-sm text-muted-foreground">
-                Get notified when Intelligence detects issues
-              </p>
-            </div>
-            <Switch
-              id="intelligence-alerts"
-              checked={preferences.intelligenceAlerts}
-              onCheckedChange={(checked) =>
-                setPreferences({ ...preferences, intelligenceAlerts: checked })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="new-reviews">New Reviews</Label>
-              <p className="text-sm text-muted-foreground">
-                Get notified when new reviews are received
-              </p>
-            </div>
-            <Switch
-              id="new-reviews"
-              checked={preferences.newReviews}
-              onCheckedChange={(checked) =>
-                setPreferences({ ...preferences, newReviews: checked })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="sync-failures">Sync Failures</Label>
-              <p className="text-sm text-muted-foreground">
-                Get notified when data sync fails
-              </p>
-            </div>
-            <Switch
-              id="sync-failures"
-              checked={preferences.syncFailures}
-              onCheckedChange={(checked) =>
-                setPreferences({ ...preferences, syncFailures: checked })
-              }
-            />
+          {/* Notification Rows */}
+          <div className="space-y-4">
+            {notificationRows.map((row) => (
+              <div key={row.key} className="grid grid-cols-[1fr,80px,80px] gap-4 items-center">
+                <div className="space-y-0.5">
+                  <Label className="font-medium">{row.label}</Label>
+                  <p className="text-sm text-muted-foreground">{row.description}</p>
+                </div>
+                <div className="flex justify-center">
+                  <Switch
+                    checked={preferences[row.key].email}
+                    onCheckedChange={(checked) => handleToggle(row.key, 'email', checked)}
+                  />
+                </div>
+                <div className="flex justify-center">
+                  <Switch
+                    checked={preferences[row.key].sms}
+                    onCheckedChange={(checked) => handleToggle(row.key, 'sms', checked)}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>
