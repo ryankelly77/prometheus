@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { BarChart3, Table2 } from 'lucide-react'
 import { useLocation } from '@/hooks/use-location'
 import {
   mockHealthScore,
@@ -18,6 +19,7 @@ import {
 import { ComparativeBar, StackedBar, TimeSeriesLine } from '@/components/charts'
 import { MetricCard, PeriodSelector, SectionHeader } from '@/components/dashboard'
 import { Card, CardContent } from '@/components/ui/card'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // PPA Chart Data
 const mockPPAChart = [
@@ -34,9 +36,16 @@ const mockPPATrend = mockMonthlyMetrics.map(m => ({
 })).reverse()
 
 export default function SalesPage() {
+  const router = useRouter()
   const { currentLocation, isAllLocations } = useLocation()
   const [currentPeriod, setCurrentPeriod] = useState('2025-01')
   const [periodType, setPeriodType] = useState<'month' | 'quarter' | 'year'>('month')
+
+  const handleTabChange = (value: string) => {
+    if (value === 'data') {
+      router.push('/dashboard/sales/data')
+    }
+  }
 
   // Find health score breakdown items for individual metrics
   const getMetricScore = (metricName: string) => {
@@ -82,20 +91,18 @@ export default function SalesPage() {
       </div>
 
       {/* View Tabs */}
-      <div className="flex gap-1 border-b">
-        <Link
-          href="/dashboard/sales"
-          className="border-b-2 border-primary px-4 py-2 text-sm font-medium text-primary"
-        >
-          Charts
-        </Link>
-        <Link
-          href="/dashboard/sales/data"
-          className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-        >
-          Data
-        </Link>
-      </div>
+      <Tabs value="charts" onValueChange={handleTabChange}>
+        <TabsList className="grid w-full grid-cols-2 max-w-xs">
+          <TabsTrigger value="charts" className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4" />
+            Charts
+          </TabsTrigger>
+          <TabsTrigger value="data" className="flex items-center gap-2">
+            <Table2 className="h-4 w-4" />
+            Data
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       <div className="space-y-6 mt-6">
           {/* Summary Cards + Insights Row */}
