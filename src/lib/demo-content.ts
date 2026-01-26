@@ -58,6 +58,22 @@ export const pageContexts: Record<string, PageContext> = {
       'Server performance',
     ],
   },
+  '/dashboard/sales/data': {
+    title: 'Sales Data',
+    description:
+      'Daily sales breakdown with sync status. Select rows to re-sync data from Toast or manually edit values.',
+    dataSources: [
+      { name: 'Daily Sales', source: 'Toast POS' },
+      { name: 'Category Breakdown', source: 'Toast POS' },
+    ],
+    demoNote: 'Data syncs automatically each morning. Manual edits are tracked with an asterisk (*) and reason.',
+    comingSoon: [
+      'Bulk data import',
+      'Export to CSV/Excel',
+      'Sync history log',
+      'Data validation alerts',
+    ],
+  },
   '/dashboard/costs': {
     title: 'Cost Management',
     description:
@@ -74,6 +90,22 @@ export const pageContexts: Record<string, PageContext> = {
       'Waste tracking',
       'Vendor price alerts',
       'Labor scheduling optimization',
+    ],
+  },
+  '/dashboard/costs/data': {
+    title: 'Cost Data',
+    description:
+      'Daily cost breakdown including labor hours, food cost, and prime cost percentage. Track sync status and edit values.',
+    dataSources: [
+      { name: 'Labor Data', source: 'Toast POS' },
+      { name: 'Food Cost', source: 'Restaurant365' },
+    ],
+    demoNote: 'Prime cost = Labor % + Food %. Industry benchmark is 60% or below.',
+    comingSoon: [
+      'Invoice upload',
+      'Theoretical food cost comparison',
+      'Labor scheduling integration',
+      'Variance alerts',
     ],
   },
   '/dashboard/customers': {
@@ -93,6 +125,22 @@ export const pageContexts: Record<string, PageContext> = {
       'Birthday/anniversary tracking',
     ],
   },
+  '/dashboard/customers/data': {
+    title: 'Guest Data',
+    description:
+      'Search and filter your guest database. View visit history, spending patterns, and guest tags.',
+    dataSources: [
+      { name: 'Guest Profiles', source: 'OpenTable / Resy' },
+      { name: 'Visit History', source: 'Reservation platforms' },
+    ],
+    demoNote: 'Guests are matched across platforms by email and phone. VIP status is based on visit frequency.',
+    comingSoon: [
+      'Guest merge/dedup',
+      'Custom tags',
+      'Export guest list',
+      'Email campaign integration',
+    ],
+  },
   '/dashboard/reviews': {
     title: 'Review Management',
     description:
@@ -109,6 +157,22 @@ export const pageContexts: Record<string, PageContext> = {
       'Sentiment analysis',
       'Staff mention detection',
       'Review request automation',
+    ],
+  },
+  '/dashboard/reviews/data': {
+    title: 'Reviews Data',
+    description:
+      'Browse and filter all reviews from connected platforms. View full review text, ratings, and response status.',
+    dataSources: [
+      { name: 'All Reviews', source: 'BrightLocal' },
+      { name: 'Response Status', source: 'Platform APIs' },
+    ],
+    demoNote: 'Reviews sync daily. Responding to reviews is done on the original platform.',
+    comingSoon: [
+      'Reply directly from dashboard',
+      'Bulk export reviews',
+      'Review tagging',
+      'Sentiment filtering',
     ],
   },
   '/dashboard/visibility': {
