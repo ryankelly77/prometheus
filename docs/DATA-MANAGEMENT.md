@@ -48,6 +48,10 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  AIVisibilitySnapshot  ← Monthly AI visibility (Pro plan)      │
 │  PromptTracking        ← AI prompt results (Pro plan)          │
 │  VisibilityConfig      ← SEMrush settings per location         │
+│  MediaMention          ← Individual press coverage             │
+│  MediaMentionSnapshot  ← Monthly PR aggregates                 │
+│  Award                 ← Awards and accolades                  │
+│  PRConfig              ← PR settings per location              │
 │  Guest                 ← Individual guest CRM data (OpenTable) │
 │  GuestVisit            ← Individual visit records              │
 │  GuestTag              ← Guest tags/labels                     │
@@ -67,6 +71,9 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 │  - Keyword table pulls from KeywordRanking                     │
 │  - AI Visibility (Pro) pulls from AIVisibilitySnapshot         │
 │  - Prompt table (Pro) pulls from PromptTracking                │
+│  - PR charts pull from MediaMentionSnapshot                    │
+│  - Mentions table pulls from MediaMention                      │
+│  - Awards section pulls from Award                             │
 │  - Health scores from HealthScoreHistory                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -84,7 +91,9 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 | Reviews | BrightLocal | Daily | 12:00 AM | Review, ReviewSnapshot |
 | Website Visibility | SEMrush | Weekly | Sunday 6:00 AM | VisibilitySnapshot, KeywordRanking |
 | AI Visibility (Pro) | SEMrush | Weekly | Sunday 6:00 AM | AIVisibilitySnapshot, PromptTracking |
-| PR Mentions | Manual/RSS | Weekly | Monday 6:00 AM | MonthlyMetrics |
+| PR Mentions | Manual/CSV | On-demand | N/A | MediaMention, MediaMentionSnapshot |
+| PR Mentions (Future) | Cision/Meltwater | Daily | 8:00 AM | MediaMention, MediaMentionSnapshot |
+| Awards | Manual | On-demand | N/A | Award |
 
 ---
 
@@ -984,6 +993,356 @@ const aiPlatformConfig = {
     color: '#6B7280',
     icon: 'globe',
     bgColor: '#F3F4F6',
+  },
+};
+```
+
+### PRConfig (Settings per Location)
+
+```prisma
+model PRConfig {
+  id              String   @id @default(cuid())
+  locationId      String   @unique
+  
+  // Agency/provider info
+  agencyName          String?      // e.g., "Milestone PR"
+  agencyContactEmail  String?
+  agencyContactPhone  String?
+  
+  // Monitoring tool integration (future)
+  cisionApiKey        String?
+  meltwaterApiKey     String?
+  
+  // Import settings
+  allowCsvImport      Boolean      @default(true)
+  lastImportAt        DateTime?
+  
+  // Notification settings
+  notifyOnNewMention  Boolean      @default(true)
+  notifyOnHighAVE     Boolean      @default(true)
+  highAVEThreshold    Decimal?     @db.Decimal(10, 2)  // Alert when AVE exceeds this
+  
+  location            Location     @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+}
+```
+
+### MediaMention (Individual Press Coverage)
+
+Individual press coverage, media appearances, and mentions.
+
+```prisma
+model MediaMention {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Basic info
+  headline            String           // Article/segment title
+  outlet              String           // e.g., "KSAT-TV", "San Antonio Magazine"
+  outletType          MediaType
+  
+  // Dates
+  publishedAt         DateTime         // When aired/published
+  fetchedAt           DateTime?        // When we learned about it
+  
+  // Reach metrics
+  uvm                 Int?             // Unique Visitors Monthly for outlet
+  ave                 Decimal?         @db.Decimal(10, 2)  // Advertising Value Equivalent
+  
+  // Engagement (if available)
+  totalEngagement     Int?             // Social shares, comments, etc.
+  journalistReach     Int?             // Journalist's social following
+  journalistShares    Int?             // Shares by journalist
+  
+  // Content
+  link                String?          // URL to article/video
+  description         String?          @db.Text  // Summary or excerpt
+  imageUrl            String?          // Screenshot or thumbnail
+  
+  // Journalist info
+  journalistName      String?
+  journalistEmail     String?
+  journalistOutlet    String?          // May differ from outlet (freelancer)
+  
+  // Categorization
+  sentiment           Sentiment?       @default(POSITIVE)
+  topics              String[]         // e.g., ["chef feature", "new menu", "event"]
+  campaign            String?          // Link to PR campaign if applicable
+  
+  // Location mentions (for multi-location coverage)
+  mentionedLocations  String[]         // Location IDs mentioned in article
+  isPrimary           Boolean          @default(true)  // Primary focus of article?
+  
+  // Status
+  status              MentionStatus    @default(ACTIVE)
+  isHighlight         Boolean          @default(false)  // Featured in monthly report
+  
+  // Internal notes
+  internalNotes       String?          @db.Text
+  
+  // Import tracking
+  importSource        ImportSource     @default(MANUAL)
+  externalId          String?          // ID from Cision/Meltwater if imported
+  
+  // Sync metadata
+  syncedAt            DateTime?
+  syncStatus          SyncStatus       @default(SUCCESS)
+  
+  location            Location         @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  
+  @@index([locationId, publishedAt])
+  @@index([locationId, outletType])
+  @@index([locationId, isHighlight])
+}
+
+enum MediaType {
+  TV
+  PRINT
+  ONLINE
+  PODCAST
+  RADIO
+  SOCIAL
+  OTHER
+}
+
+enum MentionStatus {
+  ACTIVE
+  ARCHIVED
+  FLAGGED
+}
+
+enum ImportSource {
+  MANUAL
+  CSV_IMPORT
+  CISION
+  MELTWATER
+  RSS
+  OTHER
+}
+```
+
+### MediaMentionSnapshot (Monthly PR Aggregates)
+
+Monthly snapshots of PR/media metrics.
+
+```prisma
+model MediaMentionSnapshot {
+  id              String   @id @default(cuid())
+  locationId      String
+  month           String   // 'YYYY-MM' format
+  
+  // Mention counts
+  totalMentions       Int      @default(0)
+  tvMentions          Int      @default(0)
+  printMentions       Int      @default(0)
+  onlineMentions      Int      @default(0)
+  podcastMentions     Int      @default(0)
+  radioMentions       Int      @default(0)
+  socialMentions      Int      @default(0)
+  
+  // Reach metrics
+  totalUVM            BigInt?              // Sum of all outlet UVMs
+  averageUVM          Int?                 // Average UVM per mention
+  totalAVE            Decimal? @db.Decimal(12, 2)  // Sum of all AVEs
+  
+  // Engagement
+  totalEngagement     Int?
+  averageEngagement   Int?
+  
+  // Journalist metrics
+  totalJournalistReach    Int?
+  totalJournalistShares   Int?
+  
+  // Sentiment breakdown
+  positiveMentions    Int      @default(0)
+  neutralMentions     Int      @default(0)
+  negativeMentions    Int      @default(0)
+  
+  // Highlights
+  highlightCount      Int      @default(0)  // Mentions marked as highlights
+  topOutlet           String?              // Outlet with most mentions
+  topMentionId        String?              // Highest AVE mention this month
+  
+  // Change from prior month
+  mentionsChange      Int?
+  aveChange           Decimal? @db.Decimal(5, 2)  // % change
+  
+  // Targets
+  mentionsTarget      Int?
+  aveTarget           Decimal? @db.Decimal(12, 2)
+  
+  // Sync metadata
+  syncedAt            DateTime
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, month])
+  @@index([locationId, month])
+}
+```
+
+### Award (Awards & Accolades)
+
+Track awards, nominations, and accolades.
+
+```prisma
+model Award {
+  id              String   @id @default(cuid())
+  locationId      String
+  
+  // Award info
+  name                String           // e.g., "Best Chef Texas"
+  organization        String           // e.g., "James Beard Foundation"
+  category            String?          // e.g., "Regional Chef"
+  
+  // Status
+  status              AwardStatus      @default(NOMINATED)
+  
+  // Dates
+  nominatedAt         DateTime?
+  awardedAt           DateTime?
+  announcedAt         DateTime?
+  year                Int              // Award year (e.g., 2025)
+  
+  // Details
+  description         String?          @db.Text
+  link                String?          // Link to announcement
+  imageUrl            String?          // Award logo or photo
+  
+  // Recipient
+  recipientType       RecipientType    @default(RESTAURANT)
+  recipientName       String?          // Chef name if individual award
+  
+  // Display
+  displayOnWebsite    Boolean          @default(true)
+  displayOrder        Int              @default(0)
+  isFeatured          Boolean          @default(false)
+  
+  // Internal
+  internalNotes       String?          @db.Text
+  applicationDeadline DateTime?
+  
+  location            Location         @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  
+  @@index([locationId, year])
+  @@index([locationId, status])
+}
+
+enum AwardStatus {
+  APPLIED
+  NOMINATED
+  SEMIFINALIST
+  FINALIST
+  WON
+  NOT_SELECTED
+}
+
+enum RecipientType {
+  RESTAURANT
+  CHEF
+  HOSPITALITY_GROUP
+  SOMMELIER
+  BARTENDER
+  TEAM_MEMBER
+  DISH
+  BEVERAGE_PROGRAM
+  OTHER
+}
+```
+
+### Award Display Config
+
+```typescript
+const awardStatusConfig = {
+  APPLIED: {
+    name: 'Applied',
+    color: '#6B7280',
+    bgColor: '#F3F4F6',
+    icon: 'file-text',
+  },
+  NOMINATED: {
+    name: 'Nominated',
+    color: '#3B82F6',
+    bgColor: '#EFF6FF',
+    icon: 'award',
+  },
+  SEMIFINALIST: {
+    name: 'Semifinalist',
+    color: '#8B5CF6',
+    bgColor: '#F5F3FF',
+    icon: 'medal',
+  },
+  FINALIST: {
+    name: 'Finalist',
+    color: '#F59E0B',
+    bgColor: '#FFFBEB',
+    icon: 'trophy',
+  },
+  WON: {
+    name: 'Winner',
+    color: '#10B981',
+    bgColor: '#ECFDF5',
+    icon: 'crown',
+  },
+  NOT_SELECTED: {
+    name: 'Not Selected',
+    color: '#9CA3AF',
+    bgColor: '#F9FAFB',
+    icon: 'x-circle',
+  },
+};
+
+const mediaTypeConfig = {
+  TV: {
+    name: 'Television',
+    color: '#EF4444',
+    bgColor: '#FEF2F2',
+    icon: 'tv',
+  },
+  PRINT: {
+    name: 'Print',
+    color: '#6366F1',
+    bgColor: '#EEF2FF',
+    icon: 'newspaper',
+  },
+  ONLINE: {
+    name: 'Online',
+    color: '#3B82F6',
+    bgColor: '#EFF6FF',
+    icon: 'globe',
+  },
+  PODCAST: {
+    name: 'Podcast',
+    color: '#8B5CF6',
+    bgColor: '#F5F3FF',
+    icon: 'mic',
+  },
+  RADIO: {
+    name: 'Radio',
+    color: '#EC4899',
+    bgColor: '#FDF2F8',
+    icon: 'radio',
+  },
+  SOCIAL: {
+    name: 'Social Media',
+    color: '#14B8A6',
+    bgColor: '#F0FDFA',
+    icon: 'share-2',
+  },
+  OTHER: {
+    name: 'Other',
+    color: '#6B7280',
+    bgColor: '#F3F4F6',
+    icon: 'file',
   },
 };
 ```
@@ -2225,6 +2584,587 @@ POST /api/sync/ai-visibility
 - Mention Rate
 - Last Checked
 - Category
+
+---
+
+## PR & Marketing Page
+
+### Overview
+
+The PR & Marketing page shows press coverage, media mentions, and awards. Data can be entered manually, imported via CSV from PR agencies, or integrated with monitoring tools (Cision, Meltwater) in the future.
+
+### Page Location
+
+```
+/dashboard/pr
+```
+
+### Page Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ PR & Marketing                                                [Month: November 2025 ▼]  │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  ┌─── SUMMARY CARDS ───────────────────────────────────────────────────────────────┐   │
+│  │ [Media Mentions] [Total Reach (UVM)] [Total AVE] [Engagement]                   │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── CHARTS ──────────────────────────────────────────────────────────────────────┐   │
+│  │ [Mentions Over Time]  [Reach by Media Type]  [AVE Trend]                        │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── MEDIA MENTIONS TABLE ────────────────────────────────────────────────────────┐   │
+│  │ [Search] [Filter: Type] [Filter: Date] [+ Add Mention] [Import CSV]             │   │
+│  │ [Table with individual media coverage]                                           │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  ┌─── AWARDS & ACCOLADES ──────────────────────────────────────────────────────────┐   │
+│  │ [Awards list with status badges]                                [+ Add Award]   │   │
+│  └──────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## PR Summary Cards
+
+```
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│ Media Mentions   │  │ Total Reach      │  │ Total AVE        │  │ Engagement       │
+│      15          │  │    20.49M        │  │   $189,617       │  │      50          │
+│   ▲ +3 vs LM     │  │   ▲ +15% vs LM   │  │   ▲ +22% vs LM   │  │   ▲ +12 vs LM    │
+│                  │  │                  │  │                  │  │                  │
+└──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘
+```
+
+Card definitions:
+- **Media Mentions:** Count of press coverage items this period
+- **Total Reach (UVM):** Sum of Unique Visitors Monthly across all outlets
+- **Total AVE:** Advertising Value Equivalent (what equivalent ad spend would cost)
+- **Engagement:** Total social engagement (shares, comments, etc.)
+
+---
+
+## PR Charts
+
+### Mentions Over Time (12 Months)
+
+Line or bar chart showing monthly media mention counts.
+
+```
+Mentions │
+    20   │                    ██
+    15   │          ██  ██    ██  ██
+    10   │    ██    ██  ██    ██  ██    ██
+     5   │    ██    ██  ██    ██  ██    ██    ██
+     0   │────██────██──██────██──██────██────██─────
+         │   Jan   Feb  Mar  Apr  May  Jun  Jul ...
+```
+
+### Reach by Media Type (Donut Chart)
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Reach by Media Type                                            │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│         ████████████                                           │
+│       ██            ██          TV:      12.5M (61%)          │
+│     ██      61%       ██        Online:   5.2M (25%)          │
+│    ██                  ██       Print:    2.1M (10%)          │
+│     ██                ██        Podcast:  0.7M (4%)           │
+│       ██            ██                                         │
+│         ████████████                                           │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### AVE Trend (12 Months)
+
+Line chart showing monthly AVE values with cumulative YTD line.
+
+---
+
+## Media Mentions Table
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Media Coverage                                            [+ Add Mention] [Import CSV] [Export CSV] │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ [🔍 Search...                    ]  [Type: All ▼]  [Date: This Month ▼]  [Sort: Date ▼]            │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ★ │ Date       │ Type   │ Outlet              │ Headline                           │ UVM    │ AVE      │
+│───┼────────────┼────────┼─────────────────────┼────────────────────────────────────┼────────┼──────────│
+│ ★ │ Nov 4      │ 📺 TV  │ KSAT-TV             │ SA Live: Culinary journey through  │ 1.06M  │ $9,802   │
+│   │            │        │                     │ France at Brasserie Mon Chou Chou  │        │          │
+│───┼────────────┼────────┼─────────────────────┼────────────────────────────────────┼────────┼──────────│
+│   │ Nov 4      │ 📺 TV  │ KSAT-TV             │ Take a trip to France without      │ 1.06M  │ $9,802   │
+│   │            │        │                     │ leaving Texas                      │        │          │
+│───┼────────────┼────────┼─────────────────────┼────────────────────────────────────┼────────┼──────────│
+│   │ Nov 1      │ 📰 Print│ Arts Culture Fun   │ Brasserie Mon Chou Chou: Chef      │ 30K    │ $2,150   │
+│   │            │        │                     │ Laurent Réa                        │        │          │
+│───┼────────────┼────────┼─────────────────────┼────────────────────────────────────┼────────┼──────────│
+│   │ Oct 28     │ 🌐 Online│ SA Monthly        │ Chef of the Month Feature          │ 148K   │ $4,500   │
+│───┼────────────┼────────┼─────────────────────┼────────────────────────────────────┼────────┼──────────│
+│   │ ...        │        │                     │                                    │        │          │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Showing 1-10 of 15 mentions                                   [← Prev]  Page 1 of 2  [Next →]      │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Table Columns
+
+| Column | Description | Sortable |
+|--------|-------------|----------|
+| ★ | Highlight indicator (featured) | Filter |
+| Date | Publish/air date | Yes (default desc) |
+| Type | Media type with icon | Filter |
+| Outlet | Publication/station name | Yes |
+| Headline | Article/segment title | Search |
+| UVM | Unique Visitors Monthly | Yes |
+| AVE | Advertising Value Equivalent | Yes |
+
+### Table Filters
+
+- Search by headline, outlet, journalist
+- Filter by media type (TV, Print, Online, Podcast, Radio, Social)
+- Filter by date range
+- Filter by highlight status
+- Sort by date, UVM, AVE
+
+### Row Click → Mention Detail Drawer
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ ← Back                              [Edit] [★ Highlight] [🗑] │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  📺 KSAT-TV                                                   │
+│  November 4, 2025 · 10:00 AM CT                              │
+│                                                               │
+│  SA Live: Take a culinary journey through France at          │
+│  Brasserie Mon Chou Chou                                     │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  METRICS                                                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐           │
+│  │ UVM         │  │ AVE         │  │ Engagement  │           │
+│  │ 1,059,643   │  │ $9,801.70   │  │ 20          │           │
+│  └─────────────┘  └─────────────┘  └─────────────┘           │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  DETAILS                                                      │
+│                                                               │
+│  Journalist: N/A (Live TV segment)                           │
+│  Topics: Chef Feature, French Cuisine, Pearl District        │
+│  Sentiment: Positive                                          │
+│  Campaign: Passport to France                                 │
+│                                                               │
+│  Locations Mentioned:                                         │
+│  • Brasserie Mon Chou Chou (Primary)                         │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  DESCRIPTION                                                  │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Chef Laurent Réa showcased the "Passport to France"     │  │
+│  │ regional dining experience, featuring dishes from the   │  │
+│  │ Loire Valley paired with wines selected by the          │  │
+│  │ sommelier and maître d'.                                │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  [🔗 View Coverage]                                          │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  INTERNAL NOTES                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Great segment! Consider inviting hosts back for         │  │
+│  │ holiday menu feature.                                   │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Add/Edit Media Mention Modal
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Add Media Mention                                     [✕]     │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Headline: *                                                  │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ SA Live: Culinary journey through France               │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Outlet: *                        Media Type: *               │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │ KSAT-TV                 │      │ Television        [▼] │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  Published Date: *                Published Time:             │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │ 2025-11-04              │      │ 10:00 AM              │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  Link:                                                        │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ https://www.ksat.com/sa-live/...                        │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  ── METRICS ──────────────────────────────────────────────   │
+│                                                               │
+│  UVM (Unique Visitors):           AVE ($):                   │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │ 1059643                 │      │ 9801.70               │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  Total Engagement:                                            │
+│  ┌─────────────────────────┐                                 │
+│  │ 20                      │                                 │
+│  └─────────────────────────┘                                 │
+│                                                               │
+│  ── JOURNALIST ───────────────────────────────────────────   │
+│                                                               │
+│  Name:                            Email:                      │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │                         │      │                       │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  ── CATEGORIZATION ───────────────────────────────────────   │
+│                                                               │
+│  Topics (comma-separated):                                    │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Chef Feature, French Cuisine, Pearl District           │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Campaign:                        Sentiment:                  │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │ Passport to France      │      │ Positive          [▼] │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  Description:                                                 │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Chef Laurent Réa showcased the regional dining...       │  │
+│  │                                                         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  ☑ Mark as Highlight (featured in monthly report)            │
+│                                                               │
+│                              [Cancel]  [Save Mention]         │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## CSV Import Modal
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Import Media Mentions                                 [✕]     │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Import media mentions from a CSV file exported from your    │
+│  PR agency or monitoring tool.                               │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │                                                         │  │
+│  │     📄 Drop CSV file here or click to browse           │  │
+│  │                                                         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Expected columns:                                            │
+│  • headline (required)                                        │
+│  • outlet (required)                                          │
+│  • published_date (required, YYYY-MM-DD)                     │
+│  • media_type (TV, Print, Online, Podcast, Radio, Social)    │
+│  • uvm                                                        │
+│  • ave                                                        │
+│  • link                                                       │
+│  • journalist_name                                            │
+│  • description                                                │
+│                                                               │
+│  [📥 Download Template]                                       │
+│                                                               │
+│  ── IMPORT PREVIEW ───────────────────────────────────────   │
+│  (Shows after file upload)                                    │
+│                                                               │
+│  Found 12 mentions to import                                  │
+│  • 3 TV mentions                                              │
+│  • 5 Online mentions                                          │
+│  • 4 Print mentions                                           │
+│                                                               │
+│  ⚠ 2 rows have missing required fields (will be skipped)     │
+│                                                               │
+│                              [Cancel]  [Import 12 Mentions]   │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Awards & Accolades Section
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Awards & Accolades                                                        [+ Add Award] │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                         │
+│  2025                                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 🏆 FSR America Top 50 Independent Restaurant                          [WON]     │   │
+│  │    FSR Magazine · Announced May 2025                                            │   │
+│  ├─────────────────────────────────────────────────────────────────────────────────┤   │
+│  │ ⭐ The MICHELIN Guide Texas                                        [NOMINATED]   │   │
+│  │    MICHELIN · Announcement November 2025                                        │   │
+│  ├─────────────────────────────────────────────────────────────────────────────────┤   │
+│  │ 🏅 Best Chef Texas                                                  [APPLIED]    │   │
+│  │    James Beard Foundation · Aaron Bludorn · 2026 Award Cycle                    │   │
+│  ├─────────────────────────────────────────────────────────────────────────────────┤   │
+│  │ 🏅 Outstanding Restaurateur                                         [APPLIED]    │   │
+│  │    James Beard Foundation · Hospitality Group · 2026 Award Cycle               │   │
+│  ├─────────────────────────────────────────────────────────────────────────────────┤   │
+│  │ 🏅 Outstanding Hospitality                                          [APPLIED]    │   │
+│  │    James Beard Foundation · Mon Chou Chou · 2026 Award Cycle                   │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+│  2024                                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 🏆 Best Brunch in San Antonio                                        [WON]      │   │
+│  │    San Antonio Current · Reader's Choice · Announced March 2024                 │   │
+│  └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Award Status Badges
+
+| Status | Badge | Color |
+|--------|-------|-------|
+| Applied | [APPLIED] | Gray |
+| Nominated | [NOMINATED] | Blue |
+| Semifinalist | [SEMIFINALIST] | Purple |
+| Finalist | [FINALIST] | Amber |
+| Won | [WON] | Green |
+| Not Selected | [NOT SELECTED] | Gray (muted) |
+
+### Add Award Modal
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Add Award                                             [✕]     │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Award Name: *                                                │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Best Chef Texas                                         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Organization: *                  Year: *                     │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │ James Beard Foundation  │      │ 2026              [▼] │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  Category:                                                    │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Regional Chef                                           │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Status: *                                                    │
+│  ○ Applied   ○ Nominated   ○ Semifinalist                    │
+│  ○ Finalist  ○ Won         ○ Not Selected                    │
+│                                                               │
+│  Recipient Type:                  Recipient Name:             │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │ Chef                [▼] │      │ Aaron Bludorn         │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  Application Deadline:            Announcement Date:          │
+│  ┌─────────────────────────┐      ┌───────────────────────┐  │
+│  │ 2025-11-21              │      │                       │  │
+│  └─────────────────────────┘      └───────────────────────┘  │
+│                                                               │
+│  Link:                                                        │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ https://www.jamesbeard.org/awards                       │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Description:                                                 │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Nomination for the 2026 James Beard Awards...           │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  ☑ Display on website                                        │
+│  ☐ Feature prominently                                       │
+│                                                               │
+│                              [Cancel]  [Save Award]           │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## PR Sync Logic
+
+### Manual Entry (Primary)
+
+Most PR data will be manually entered by staff or imported from agency reports.
+
+### CSV Import
+
+**Frequency:** On-demand
+
+**Process:**
+1. User uploads CSV file
+2. Validate required columns (headline, outlet, published_date)
+3. Parse and preview data
+4. Show warnings for missing optional fields
+5. User confirms import
+6. Create MediaMention records
+7. Recalculate MediaMentionSnapshot for affected months
+
+### Future: Monitoring Tool Integration
+
+**Frequency:** Daily at 8:00 AM
+
+**Process:**
+1. Call Cision/Meltwater API for new mentions
+2. Match by externalId to avoid duplicates
+3. Create MediaMention records
+4. Update MediaMentionSnapshot
+5. Send notification if high-AVE mention found
+
+---
+
+## PR API Endpoints
+
+### Media Mentions
+
+```typescript
+// Get mentions for period
+GET /api/locations/{id}/mentions
+  ?page=1
+  &pageSize=25
+  &search=ksat
+  &type=TV,ONLINE
+  &dateFrom=2025-11-01
+  &dateTo=2025-11-30
+  &highlight=true
+  &sortBy=publishedAt
+  &sortOrder=desc
+
+// Get single mention
+GET /api/locations/{id}/mentions/{mentionId}
+
+// Create mention
+POST /api/locations/{id}/mentions
+{
+  headline: string,
+  outlet: string,
+  outletType: MediaType,
+  publishedAt: datetime,
+  uvm?: number,
+  ave?: number,
+  link?: string,
+  // ... other fields
+}
+
+// Update mention
+PATCH /api/locations/{id}/mentions/{mentionId}
+{
+  isHighlight: true
+}
+
+// Delete mention
+DELETE /api/locations/{id}/mentions/{mentionId}
+
+// Import mentions from CSV
+POST /api/locations/{id}/mentions/import
+Content-Type: multipart/form-data
+{
+  file: CSV file
+}
+
+// Export mentions
+GET /api/locations/{id}/mentions/export?format=csv&dateFrom=2025-01-01&dateTo=2025-12-31
+```
+
+### PR Snapshots
+
+```typescript
+// Get monthly snapshots
+GET /api/locations/{id}/pr-snapshots
+  ?year=2025
+
+// Get single snapshot
+GET /api/locations/{id}/pr-snapshots/{month}  // month = "2025-11"
+```
+
+### Awards
+
+```typescript
+// Get awards
+GET /api/locations/{id}/awards
+  ?year=2025
+  &status=WON,NOMINATED
+
+// Get single award
+GET /api/locations/{id}/awards/{awardId}
+
+// Create award
+POST /api/locations/{id}/awards
+{
+  name: string,
+  organization: string,
+  year: number,
+  status: AwardStatus,
+  // ... other fields
+}
+
+// Update award
+PATCH /api/locations/{id}/awards/{awardId}
+{
+  status: "WON",
+  awardedAt: "2025-11-15"
+}
+
+// Delete award
+DELETE /api/locations/{id}/awards/{awardId}
+```
+
+---
+
+## PR Data Export
+
+### Media Mentions Export (CSV)
+
+- Date Published
+- Outlet
+- Media Type
+- Headline
+- UVM
+- AVE
+- Engagement
+- Journalist Name
+- Link
+- Topics
+- Sentiment
+- Campaign
+- Is Highlight
+
+### Awards Export (CSV)
+
+- Award Name
+- Organization
+- Category
+- Year
+- Status
+- Recipient Type
+- Recipient Name
+- Nominated Date
+- Awarded Date
+- Link
 
 ---
 
