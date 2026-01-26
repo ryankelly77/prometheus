@@ -6,12 +6,10 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useDemo } from './demo-provider'
 import { submitFeedback } from '@/lib/feedback'
-import { cn } from '@/lib/utils'
 
 export function FeedbackModal() {
   const { isFeedbackOpen, closeFeedback, currentPageContext, currentPath } = useDemo()
   const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
   const [comment, setComment] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -27,7 +25,6 @@ export function FeedbackModal() {
 
     const result = await submitFeedback({
       name: name.trim(),
-      email: email.trim() || undefined,
       page: currentPageContext?.title || currentPath,
       comment: comment.trim(),
     })
@@ -37,7 +34,6 @@ export function FeedbackModal() {
     if (result.success) {
       toast.success('Thanks for your feedback!')
       setName('')
-      setEmail('')
       setComment('')
       closeFeedback()
     } else {
@@ -89,21 +85,6 @@ export function FeedbackModal() {
               className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               placeholder="Your name"
               required
-            />
-          </div>
-
-          {/* Email */}
-          <div className="space-y-1.5">
-            <label htmlFor="feedback-email" className="text-sm font-medium">
-              Email <span className="text-muted-foreground">(optional)</span>
-            </label>
-            <input
-              id="feedback-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="your@email.com"
             />
           </div>
 
