@@ -39,7 +39,10 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 ├─────────────────────────────────────────────────────────────────┤
 │  DailyMetrics          ← Source of truth (sales, costs)        │
 │  DailyCustomerMetrics  ← Guest counts by day                   │
-│  DailyReviews          ← Review counts by day                  │
+│  Review                ← Individual reviews (BrightLocal)      │
+│  ReviewSnapshot        ← Monthly review aggregates             │
+│  ReviewSourceConfig    ← Platform settings per location        │
+│  DailyReviews          ← Daily review aggregates (calculated)  │
 │  Guest                 ← Individual guest CRM data (OpenTable) │
 │  GuestVisit            ← Individual visit records              │
 │  GuestTag              ← Guest tags/labels                     │
@@ -51,8 +54,10 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 ┌─────────────────────────────────────────────────────────────────┐
 │                      DASHBOARD                                  │
 │  - Charts pull from MonthlyMetrics (fast)                      │
-│  - Data tables pull from DailyMetrics                          │
+│  - Sales/Costs tables pull from DailyMetrics                   │
 │  - Guest CRM table pulls from Guest + GuestVisit               │
+│  - Reviews table pulls from Review                             │
+│  - Review charts pull from ReviewSnapshot                      │
 │  - Health scores from HealthScoreHistory                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -67,7 +72,7 @@ Data flows: **Integration → Sync Service → Daily Tables → Monthly Rollups 
 | Customer Counts | Toast | Nightly | 6:00 AM | DailyMetrics |
 | Guest Frequency | OpenTable | Nightly | 6:00 AM | DailyCustomerMetrics |
 | Guest CRM Data | OpenTable | Nightly | 6:00 AM | Guest, GuestVisit |
-| Reviews | BrightLocal | Daily | 12:00 AM | DailyReviews |
+| Reviews | BrightLocal | Daily | 12:00 AM | Review, ReviewSnapshot |
 | Website Visibility | SEMRush | Weekly | Sunday 12:00 AM | MonthlyMetrics |
 | PR Mentions | Manual/RSS | Weekly | Monday 6:00 AM | MonthlyMetrics |
 
@@ -163,7 +168,7 @@ model DailyCustomerMetrics {
 }
 ```
 
-### DailyReviews
+### DailyReviews (Aggregated - Calculated from Review table)
 
 ```prisma
 model DailyReviews {
@@ -171,7 +176,7 @@ model DailyReviews {
   locationId      String
   date            DateTime @db.Date
   
-  // Review counts by rating
+  // Review counts by rating (calculated from Review table)
   oneStarCount    Int      @default(0)
   twoStarCount    Int      @default(0)
   threeStarCount  Int      @default(0)
@@ -183,13 +188,151 @@ model DailyReviews {
   averageRating   Decimal  @db.Decimal(3, 2)
   
   // Sync metadata
-  source          String   // 'brightlocal', 'manual'
-  syncedAt        DateTime
-  syncStatus      SyncStatus @default(SUCCESS)
+  calculatedAt    DateTime
   
   location        Location @relation(fields: [locationId], references: [id])
   
   @@unique([locationId, date])
+}
+```
+
+### Review (Individual Reviews from BrightLocal)
+
+Individual review records from BrightLocal API. This is the source of truth; DailyReviews is calculated from this.
+
+```prisma
+model Review {
+  id                  String    @id @default(cuid())
+  locationId          String
+  
+  // BrightLocal identifiers
+  brightLocalId       String?   // BrightLocal's review ID
+  
+  // Review content
+  content             String?   @db.Text  // Full review text
+  rating              Int       // 1-5 stars
+  
+  // Reviewer info
+  reviewerName        String?
+  reviewerAvatarUrl   String?
+  
+  // Source platform
+  source              ReviewSource
+  sourceUrl           String?   // Direct link to review
+  
+  // Dates
+  reviewDate          DateTime  // When review was posted
+  fetchedAt           DateTime  // When we first fetched it
+  
+  // Status
+  status              ReviewStatus @default(ACTIVE)
+  
+  // Sentiment (can be calculated or from API)
+  sentiment           Sentiment?
+  sentimentScore      Decimal?  @db.Decimal(4, 3)  // -1.0 to 1.0
+  
+  // Response tracking
+  hasResponse         Boolean   @default(false)
+  responseDate        DateTime?
+  responseContent     String?   @db.Text
+  
+  // Flags
+  isFlagged           Boolean   @default(false)
+  flagReason          String?
+  flaggedBy           String?
+  flaggedAt           DateTime?
+  
+  // Internal notes
+  internalNotes       String?   @db.Text
+  
+  // Sync metadata
+  syncedAt            DateTime
+  syncStatus          SyncStatus @default(SUCCESS)
+  
+  // Relations
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  
+  @@unique([locationId, brightLocalId])
+  @@index([locationId, reviewDate])
+  @@index([locationId, rating])
+  @@index([locationId, source])
+  @@index([locationId, status])
+}
+
+enum ReviewSource {
+  GOOGLE
+  YELP
+  FACEBOOK
+  TRIPADVISOR
+  OPENTABLE
+  FOURSQUARE
+  ZOMATO
+  GRUBHUB
+  DOORDASH
+  UBEREATS
+  OTHER
+}
+
+enum ReviewStatus {
+  ACTIVE
+  PENDING
+  REMOVED
+  FLAGGED
+}
+
+enum Sentiment {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+```
+
+### ReviewSnapshot (Point-in-time Aggregates)
+
+Monthly snapshots for historical tracking and charts. Calculated from Review table.
+
+```prisma
+model ReviewSnapshot {
+  id              String   @id @default(cuid())
+  locationId      String
+  month           String   // 'YYYY-MM' format
+  
+  // Totals across all platforms
+  totalReviewCount    Int
+  averageRating       Decimal  @db.Decimal(3, 2)
+  newReviewsCount     Int      // Reviews posted this month
+  
+  // By rating
+  oneStarCount        Int      @default(0)
+  twoStarCount        Int      @default(0)
+  threeStarCount      Int      @default(0)
+  fourStarCount       Int      @default(0)
+  fiveStarCount       Int      @default(0)
+  
+  // Negative review tracking (1-3 stars)
+  negativeReviewCount Int      @default(0)
+  
+  // By platform (JSON for flexibility)
+  byPlatform          Json?    // { google: { count: 500, avg: 4.3 }, yelp: { count: 120, avg: 4.1 } }
+  
+  // Sentiment breakdown
+  positiveCount       Int?
+  neutralCount        Int?
+  negativeCount       Int?
+  
+  // Response rate
+  reviewsWithResponse Int      @default(0)
+  responseRate        Decimal? @db.Decimal(5, 2)  // percentage
+  
+  // Calculated at
+  calculatedAt        DateTime
+  
+  location            Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, month])
 }
 ```
 
@@ -340,6 +483,159 @@ const defaultGuestTags = [
   { name: 'Influencer', color: '#06b6d4', isSystem: false },
   { name: 'Press/Media', color: '#6366f1', isSystem: false },
 ];
+```
+
+### Review (BrightLocal Individual Reviews)
+
+Individual review records from BrightLocal API for reputation management.
+
+```prisma
+model Review {
+  id                  String       @id @default(cuid())
+  locationId          String
+  
+  // BrightLocal identifiers
+  brightLocalReviewId String?      // BrightLocal's review ID
+  
+  // Review content
+  reviewerName        String
+  reviewText          String?      @db.Text
+  rating              Int          // 1-5 stars
+  
+  // Source & timing
+  source              ReviewSource
+  sourceUrl           String?      // Direct link to review on platform
+  postedAt            DateTime     // When review was posted on platform
+  
+  // Status
+  status              ReviewStatus @default(ACTIVE)
+  
+  // Response tracking
+  hasResponse         Boolean      @default(false)
+  responseText        String?      @db.Text
+  respondedAt         DateTime?
+  respondedBy         String?      // userId
+  
+  // Sentiment (optional - can be calculated or from API)
+  sentiment           ReviewSentiment?
+  
+  // Sync metadata
+  syncedAt            DateTime
+  syncStatus          SyncStatus   @default(SUCCESS)
+  
+  // Relations
+  location            Location     @relation(fields: [locationId], references: [id])
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  
+  @@unique([locationId, brightLocalReviewId])
+  @@unique([locationId, source, reviewerName, postedAt])
+  @@index([locationId, postedAt])
+  @@index([locationId, source])
+  @@index([locationId, rating])
+  @@index([locationId, status])
+}
+
+enum ReviewSource {
+  GOOGLE
+  YELP
+  FACEBOOK
+  TRIPADVISOR
+  OPENTABLE
+  FOURSQUARE
+  ZOMATO
+  GRUBHUB
+  DOORDASH
+  UBEREATS
+  OTHER
+}
+
+enum ReviewStatus {
+  ACTIVE
+  PENDING
+  REMOVED
+  FLAGGED
+}
+
+enum ReviewSentiment {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+```
+
+### ReviewSourceConfig (Per-Location Settings)
+
+```prisma
+model ReviewSourceConfig {
+  id              String       @id @default(cuid())
+  locationId      String
+  
+  source          ReviewSource
+  enabled         Boolean      @default(true)
+  
+  // Platform-specific IDs for fetching
+  externalPlaceId String?      // Google Place ID, Yelp Business ID, etc.
+  
+  // Tracking
+  lastSyncAt      DateTime?
+  totalReviews    Int          @default(0)
+  averageRating   Decimal?     @db.Decimal(3, 2)
+  
+  location        Location     @relation(fields: [locationId], references: [id])
+  
+  @@unique([locationId, source])
+}
+```
+
+### Review Source Display Config
+
+```typescript
+const reviewSourceConfig = {
+  GOOGLE: {
+    name: 'Google',
+    color: '#4285F4',
+    icon: 'google',
+    bgColor: '#E8F0FE',
+  },
+  YELP: {
+    name: 'Yelp',
+    color: '#D32323',
+    icon: 'yelp',
+    bgColor: '#FDEAEA',
+  },
+  FACEBOOK: {
+    name: 'Facebook',
+    color: '#1877F2',
+    icon: 'facebook',
+    bgColor: '#E7F3FF',
+  },
+  TRIPADVISOR: {
+    name: 'TripAdvisor',
+    color: '#00AF87',
+    icon: 'tripadvisor',
+    bgColor: '#E6F7F3',
+  },
+  OPENTABLE: {
+    name: 'OpenTable',
+    color: '#DA3743',
+    icon: 'utensils',
+    bgColor: '#FCECED',
+  },
+  FOURSQUARE: {
+    name: 'Foursquare',
+    color: '#F94877',
+    icon: 'foursquare',
+    bgColor: '#FEE9EF',
+  },
+  OTHER: {
+    name: 'Other',
+    color: '#6B7280',
+    icon: 'globe',
+    bgColor: '#F3F4F6',
+  },
+};
 ```
 
 ### MonthlyMetrics (Rolled Up Cache)
@@ -575,12 +871,14 @@ Or as a tab on each page:
 **Reviews Data:**
 | Column | Source |
 |--------|--------|
-| 5 Star | BrightLocal |
-| 4 Star | BrightLocal |
-| 3 Star | BrightLocal |
-| 2 Star | BrightLocal |
-| 1 Star | BrightLocal |
-| Average | Calculated |
+| Review Content | BrightLocal |
+| Reviewer Name | BrightLocal |
+| Rating (1-5) | BrightLocal |
+| Review Date | BrightLocal |
+| Source Platform | BrightLocal |
+| Status | BrightLocal |
+| Has Response | BrightLocal |
+| Sentiment | Calculated (AI)
 
 ---
 
@@ -808,6 +1106,288 @@ Export to CSV includes:
 - Tags (comma-separated)
 - Loyalty Segment
 - First Visit Date
+
+---
+
+## Reviews Data Table (BrightLocal)
+
+### Overview
+
+Individual review records from BrightLocal API. Pulls from 80+ review platforms including Google, Yelp, Facebook, TripAdvisor.
+
+### Page Location
+
+```
+/dashboard/reviews/data
+```
+
+Or as a tab on the Reviews page:
+```
+/dashboard/reviews?view=charts  (default)
+/dashboard/reviews?view=reviews
+```
+
+### Reviews Data Table UI
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Reviews                                                                                                         │
+│ Last synced: Jan 25, 2025 12:00 AM from BrightLocal                                   [↻ Sync Now] [Export CSV] │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 🔍 [Search reviews...       ]   [Rating: All ▼]   [Source: All ▼]   [Period: Last 30 Days ▼]   [Status: All ▼] │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Date       │ Source   │ Rating │ Reviewer        │ Review Content                              │ Status │ Resp │
+│────────────┼──────────┼────────┼─────────────────┼─────────────────────────────────────────────┼────────┼──────│
+│ Jan 24     │ Google   │ ★★★★★  │ Sarah M.        │ "Amazing food and service! The ribeye was..."│ Active │  ✓   │
+│ Jan 23     │ Yelp     │ ★★★★☆  │ Michael C.      │ "Great atmosphere but a bit loud. Food was..."│ Active │  ✓   │
+│ Jan 22     │ Google   │ ★★☆☆☆  │ Jennifer K.     │ "Waited 45 minutes for our table despite..."│ Active │  ✗   │
+│ Jan 21     │ Facebook │ ★★★★★  │ David T.        │ "Best brunch in San Antonio! The chicken..."│ Active │  ✗   │
+│ Jan 20     │ TripAdv  │ ★★★☆☆  │ Robert W.       │ "Food was good but overpriced for what..."  │ Active │  ✓   │
+│ Jan 19     │ Google   │ ★☆☆☆☆  │ Emily R.        │ "Terrible experience. Server was rude and..."│ Flagged│  ✓   │
+│ ...        │          │        │                 │                                             │        │      │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Showing 1-25 of 342 reviews                                               [← Prev]  Page 1 of 14  [Next →]     │
+│                                                                           [25 ▼] per page                       │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Column Definitions
+
+| Column | Description | Sortable |
+|--------|-------------|----------|
+| Date | When review was posted | Yes (default desc) |
+| Source | Platform (Google, Yelp, etc.) | Filter only |
+| Rating | Star rating (1-5) | Yes |
+| Reviewer | Reviewer name | No |
+| Review Content | Truncated review text (click to expand) | No |
+| Status | Active, Pending, Removed, Flagged | Filter only |
+| Resp | Has management response | Filter only |
+
+### Filters
+
+**Search:**
+- Search review content (full text)
+- Search reviewer name
+
+**Rating Filter:**
+- All Ratings
+- 5 Stars
+- 4 Stars
+- 3 Stars
+- 2 Stars
+- 1 Star
+- Negative (1-3 Stars) ← Quick filter for attention-needed
+
+**Source Filter:**
+- All Sources
+- Google (with count)
+- Yelp (with count)
+- Facebook (with count)
+- TripAdvisor (with count)
+- OpenTable (with count)
+- Other
+
+**Period Filter:**
+- Last 7 Days
+- Last 30 Days (default)
+- Last 90 Days
+- This Month
+- Last Month
+- This Year
+- Custom Date Range
+
+**Status Filter:**
+- All
+- Active
+- Needs Response (no response yet)
+- Flagged
+- Removed
+
+### Row Click → Review Detail Drawer
+
+Clicking a row opens a slide-out drawer with full review details:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ ← Back                                    [Flag] [Copy Link]  │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ★★☆☆☆  2 Stars                                              │
+│  Google · January 22, 2025                                    │
+│                                                               │
+│  Jennifer K.                                                  │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  REVIEW                                                       │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ "Waited 45 minutes for our table despite having a      │  │
+│  │ reservation. When we finally sat down, the server      │  │
+│  │ seemed overwhelmed and forgot our drink order twice.   │  │
+│  │ The food was decent but not worth the wait. The        │  │
+│  │ ribeye was cooked properly but the sides were cold.    │  │
+│  │ Disappointing experience overall."                      │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  [View on Google ↗]                                          │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  MANAGEMENT RESPONSE                                          │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ No response yet                                         │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│  [Suggest Response with AI]  [Mark as Responded]             │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  SENTIMENT ANALYSIS                                           │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Overall: Negative (-0.65)                               │  │
+│  │                                                         │  │
+│  │ Key Issues Detected:                                    │  │
+│  │ • Wait time / Reservation issues                        │  │
+│  │ • Service quality                                       │  │
+│  │ • Food temperature                                      │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+├───────────────────────────────────────────────────────────────┤
+│  INTERNAL NOTES                                               │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Spoke with FOH manager - this was during the private   │  │
+│  │ event on Jan 22 that caused delays.                    │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│  [Edit Notes]                                                 │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Negative Review Alert Row
+
+Negative reviews (1-3 stars) should be visually distinct:
+
+```
+│ Jan 22     │ Google   │ ★★☆☆☆  │ Jennifer K.     │ "Waited 45 minutes for our table despite..."│ Active │  ✗   │
+              ↑ Red background tint on row
+              ↑ Red star icons
+```
+
+### Review Sync Logic
+
+**Sync Frequency:** Daily at 12:00 AM
+
+**Sync Process:**
+1. Call BrightLocal API for new/updated reviews
+2. For each review:
+   - Match by `brightLocalId`
+   - If new, create Review record
+   - If existing, update status/content if changed
+3. Calculate sentiment (if not provided by API)
+4. Update ReviewSnapshot for affected months
+5. Recalculate DailyReviews aggregates
+
+**Sentiment Calculation:**
+```typescript
+async function calculateSentiment(reviewContent: string): Promise<{
+  sentiment: Sentiment;
+  score: number;
+}> {
+  // Use Claude API or similar for sentiment analysis
+  // Score: -1.0 (very negative) to 1.0 (very positive)
+  
+  // Simple heuristic fallback based on rating:
+  // 5 stars = POSITIVE (0.8)
+  // 4 stars = POSITIVE (0.4)
+  // 3 stars = NEUTRAL (0.0)
+  // 2 stars = NEGATIVE (-0.4)
+  // 1 star = NEGATIVE (-0.8)
+}
+```
+
+### AI Response Suggestions (Pro Plan)
+
+For Pro plan users, offer AI-generated response suggestions:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Suggested Response                                            │
+├───────────────────────────────────────────────────────────────┤
+│ "Dear Jennifer, thank you for taking the time to share your  │
+│ feedback. We sincerely apologize for the extended wait time  │
+│ and the service issues you experienced during your visit on  │
+│ January 22nd. This was during an unusually busy evening,     │
+│ but that's no excuse for not meeting our standards. We've    │
+│ addressed this with our team to ensure it doesn't happen     │
+│ again. We'd love the opportunity to make it right - please   │
+│ reach out to us at manager@southerleigh.com for a           │
+│ complimentary appetizer on your next visit."                 │
+├───────────────────────────────────────────────────────────────┤
+│ [Regenerate]  [Copy]  [Edit & Post]                          │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Review API Endpoints
+
+```typescript
+// Get paginated review list
+GET /api/locations/{id}/reviews
+  ?page=1
+  &pageSize=25
+  &search=ribeye
+  &rating=1,2,3          // Negative only
+  &source=GOOGLE,YELP
+  &status=ACTIVE
+  &hasResponse=false     // Needs response
+  &periodStart=2025-01-01
+  &periodEnd=2025-01-31
+  &sortBy=reviewDate
+  &sortOrder=desc
+
+// Get single review with full details
+GET /api/locations/{id}/reviews/{reviewId}
+
+// Update review (notes, flags)
+PATCH /api/locations/{id}/reviews/{reviewId}
+{
+  internalNotes: 'Spoke with manager...',
+  isFlagged: true,
+  flagReason: 'Suspected fake review'
+}
+
+// Mark review as responded
+POST /api/locations/{id}/reviews/{reviewId}/mark-responded
+{
+  responseDate: '2025-01-23',
+  responseContent: 'Thank you for your feedback...'
+}
+
+// Generate AI response suggestion (Pro plan)
+POST /api/locations/{id}/reviews/{reviewId}/suggest-response
+
+// Get review snapshots (for charts)
+GET /api/locations/{id}/review-snapshots
+  ?startMonth=2024-01
+  &endMonth=2025-01
+
+// Trigger review sync
+POST /api/sync/reviews
+{
+  locationId: string,
+  force?: boolean
+}
+```
+
+### Review Data Export
+
+Export to CSV includes:
+- Review Date
+- Source
+- Rating
+- Reviewer Name
+- Review Content (full)
+- Sentiment
+- Sentiment Score
+- Has Response
+- Response Date
+- Status
+- Internal Notes
 
 ---
 
