@@ -104,7 +104,9 @@ export function LocationSwitcher({ collapsed }: LocationSwitcherProps) {
                 <div className="flex-1 text-left">
                   <p className="truncate font-medium">{location.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {location.totalSeats} seats
+                    {location.city && location.state
+                      ? `${location.city}, ${location.state}`
+                      : location.conceptType || "Restaurant"}
                   </p>
                 </div>
                 {currentLocation?.id === location.id && (
