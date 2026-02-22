@@ -1,14 +1,1749 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// ============================================
+// PRISMA CONFIG
+// ============================================
 
 generator client {
-  provider = "prisma-client"
+  provider = "prisma-client-js"
   output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// ============================================
+// PHASE 1 ENUMS
+// ============================================
+
+enum PlanType {
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum SSOProvider {
+  SAML
+  OIDC
+  AZURE_AD
+  OKTA
+  GOOGLE_WORKSPACE
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  PARTNER_ADMIN
+  GROUP_ADMIN
+  LOCATION_MANAGER
+  VIEWER
+}
+
+// ============================================
+// ORGANIZATION (White-Label Partner)
+// ============================================
+
+model Organization {
+  id              String   @id @default(cuid())
+  name            String
+  slug            String   @unique  // {slug}.prometheus.app
+
+  // White-label branding
+  logoUrl         String?
+  logoIconUrl     String?
+  faviconUrl      String?
+  primaryColor    String   @default("#6366f1")
+  accentColor     String   @default("#8b5cf6")
+  darkMode        Boolean  @default(true)
+
+  // Custom domain (Phase 1b)
+  customDomain      String?  @unique
+  domainVerified    Boolean  @default(false)
+  domainVerifyToken String?
+
+  // SSO Configuration (Phase 1b - fields only, no implementation)
+  ssoEnabled      Boolean      @default(false)
+  ssoProvider     SSOProvider?
+  ssoEntityId     String?
+  ssoMetadataUrl  String?
+  ssoClientId     String?
+  ssoClientSecret String?      // Encrypted
+  ssoTenantId     String?
+  ssoDomain       String?      // Email domain for SSO routing
+
+  // Settings
+  allowPublicSignup Boolean @default(false)
+  requireSso        Boolean @default(false)
+
+  // Subscription
+  plan           PlanType  @default(STARTER)
+  planSeats      Int       @default(5)
+  planLocations  Int       @default(1)
+  trialEndsAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Phase 1 relations
+  restaurantGroups  RestaurantGroup[]
+  userOrganizations UserOrganization[]
+  invitations       Invitation[]
+  ssoSessions       SSOSession[]
+
+  // Phase 2 relations
+  aiPrompts         AIPrompt[]
+  aiUsage           AIUsage[]
+  integrationStatus IntegrationStatus[]
+  apiLogs           ApiLog[]
+
+  @@index([slug])
+}
+
+// ============================================
+// RESTAURANT GROUP
+// ============================================
+
+model RestaurantGroup {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  locations Location[]
+
+  @@index([organizationId])
+}
+
+// ============================================
+// LOCATION
+// ============================================
+
+model Location {
+  id                String          @id @default(cuid())
+  restaurantGroupId String
+  restaurantGroup   RestaurantGroup @relation(fields: [restaurantGroupId], references: [id], onDelete: Cascade)
+
+  name        String
+  address     String?
+  city        String?
+  state       String?
+  zipCode     String?
+  latitude    Float?
+  longitude   Float?
+  timezone    String  @default("America/Chicago")
+  conceptType String?
+
+  isActive  Boolean @default(true)
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Phase 2 relations
+  daypartMetrics     DaypartMetrics[]
+  dailyMetrics       DailyMetrics[]
+  monthlyMetrics     MonthlyMetrics[]
+  customerLoyalty    CustomerLoyalty[]
+  reviews            Review[]
+  reviewMetrics      ReviewMetrics[]
+  websiteVisibility  WebsiteVisibility[]
+  prMentions         PRMention[]
+  healthScoreConfig  HealthScoreConfig?
+  healthScoreHistory HealthScoreHistory[]
+  weatherData        WeatherData[]
+  localEvents        LocalEvent[]
+  integrations       Integration[]
+  socialAccounts     SocialAccount[]
+  aiInsights         AIInsight[]
+  apiLogs            ApiLog[]
+
+  @@index([restaurantGroupId])
+}
+
+// ============================================
+// USER PROFILE
+// ============================================
+
+model UserProfile {
+  id        String  @id // Same as Supabase auth.users.id
+  email     String  @unique
+  fullName  String?
+  avatarUrl String?
+
+  // SSO linking (Phase 1b)
+  ssoProviderId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Phase 1 relations
+  userOrganizations UserOrganization[]
+
+  // Phase 2 relations
+  prMentionsCreated     PRMention[]
+  localEventsCreated    LocalEvent[]
+  integrationsConnected Integration[]
+  aiInsightsGenerated   AIInsight[]
+
+  @@index([email])
+}
+
+// ============================================
+// USER ORGANIZATION (Junction with Roles & Access Scope)
+// ============================================
+
+model UserOrganization {
+  id             String       @id @default(cuid())
+  userId         String
+  user           UserProfile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  role UserRole
+
+  // Access scope - evaluated in order:
+  // 1. SUPER_ADMIN, PARTNER_ADMIN → ALL locations (ignore arrays)
+  // 2. If both arrays empty → ALL locations in org
+  // 3. If restaurantGroupIds set → all locations in those groups
+  // 4. If locationIds set → only those specific locations
+  // 5. Can combine: groups + additional individual locations
+  restaurantGroupIds String[] @default([])
+  locationIds        String[] @default([])
+
+  isActive     Boolean   @default(true)
+  lastAccessAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+// ============================================
+// INVITATION
+// ============================================
+
+model Invitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  email              String
+  role               UserRole
+  restaurantGroupIds String[] @default([])
+  locationIds        String[] @default([])
+
+  token      String    @unique @default(cuid())
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  invitedById    String
+  invitedByEmail String
+
+  emailSentAt    DateTime?
+  emailSentCount Int       @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, email])
+  @@index([token])
+  @@index([organizationId])
+}
+
+// ============================================
+// SSO SESSION (Phase 1b - table only)
+// ============================================
+
+model SSOSession {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  state       String  @unique // CSRF state parameter
+  nonce       String? // OIDC nonce
+  redirectUrl String?
+
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([state])
+}
+
+// ============================================
+// PHASE 2 ENUMS - METRICS
+// ============================================
+
+enum Daypart {
+  BREAKFAST    // 6am-10am weekdays
+  BRUNCH       // 10am-2pm weekends
+  LUNCH        // 11am-3pm
+  AFTERNOON    // 3pm-5pm
+  DINNER       // 5pm-9pm
+  LATE_NIGHT   // 9pm-close
+}
+
+enum Trend {
+  UP
+  DOWN
+  FLAT
+}
+
+enum HealthStatus {
+  EXCELLENT    // >= 100%
+  GOOD         // 90-99%
+  WARNING      // 80-89%
+  DANGER       // < 80%
+}
+
+// ============================================
+// PHASE 2 ENUMS - REVIEWS & SENTIMENT
+// ============================================
+
+enum ReviewPlatform {
+  GOOGLE
+  YELP
+  TRIPADVISOR
+  FACEBOOK
+  OPENTABLE
+  RESY
+  OTHER
+}
+
+enum SentimentLabel {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+  MIXED
+}
+
+enum MentionType {
+  FEATURE_ARTICLE
+  REVIEW
+  AWARD
+  BEST_OF_LIST
+  NEWS_MENTION
+  SOCIAL_INFLUENCER
+  TV_RADIO
+  OTHER
+}
+
+// ============================================
+// PHASE 2 ENUMS - WEATHER & EVENTS
+// ============================================
+
+enum WeatherCondition {
+  CLEAR
+  MOSTLY_CLEAR
+  PARTLY_CLOUDY
+  OVERCAST
+  FOGGY
+  LIGHT_DRIZZLE
+  DRIZZLE
+  HEAVY_DRIZZLE
+  LIGHT_RAIN
+  RAIN
+  HEAVY_RAIN
+  LIGHT_SNOW
+  SNOW
+  HEAVY_SNOW
+  SLEET
+  THUNDERSTORM
+  THUNDERSTORM_HAIL
+}
+
+enum EventCategory {
+  SPORTS
+  CONCERT
+  THEATER
+  COMEDY
+  CONFERENCE
+  CONVENTION
+  FESTIVAL
+  HOLIDAY
+  SCHOOL_BREAK
+  SCHOOL_EVENT
+  COMMUNITY
+  FOOD_DRINK
+  PRIVATE_PARTY
+  OTHER
+}
+
+enum EventSource {
+  SEATGEEK
+  TICKETMASTER
+  EVENTBRITE
+  SYSTEM
+  MANUAL
+}
+
+enum EventImpact {
+  MINIMAL      // 1-2
+  LOW          // 3-4
+  MODERATE     // 5-6
+  HIGH         // 7-8
+  MAJOR        // 9-10
+}
+
+enum HolidayType {
+  FEDERAL
+  STATE
+  RELIGIOUS
+  CULTURAL
+  COMMERCIAL
+  LOCAL
+  SCHOOL
+}
+
+// ============================================
+// PHASE 2 ENUMS - INTEGRATIONS
+// ============================================
+
+enum IntegrationType {
+  // POS
+  TOAST
+  SQUARE
+  CLOVER
+  REVEL
+  // Accounting
+  R365
+  MARGINEDGE
+  QUICKBOOKS
+  // Reservations
+  OPENTABLE
+  RESY
+  TOCK
+  YELP_RESERVATIONS
+  // Reviews (user BYOA)
+  GOOGLE_BUSINESS
+  // Social (user BYOA)
+  SPROUT_SOCIAL
+  META_BUSINESS
+}
+
+enum IntegrationConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  EXPIRED
+  ERROR
+  PENDING
+}
+
+enum SyncStatus {
+  SUCCESS
+  PARTIAL
+  FAILED
+  SKIPPED
+}
+
+enum TokenStatus {
+  VALID
+  EXPIRING_SOON
+  EXPIRED
+  REFRESH_FAILED
+  NEEDS_REAUTH
+}
+
+enum ApiService {
+  // Managed (Prometheus account)
+  OPEN_METEO
+  SEATGEEK
+  TICKETMASTER
+  EVENTBRITE
+  BRIGHTLOCAL_REVIEWS
+  BRIGHTLOCAL_LOCAL
+  SEMRUSH
+  METRICOOL
+  // User-connected
+  TOAST
+  SQUARE
+  CLOVER
+  REVEL
+  R365
+  MARGINEDGE
+  QUICKBOOKS
+  OPENTABLE
+  RESY
+  TOCK
+  YELP_RESERVATIONS
+  GOOGLE_BUSINESS
+  SPROUT_SOCIAL
+  META_BUSINESS
+  // Internal
+  CLAUDE_AI
+  PROMETHEUS_AI_VISIBILITY
+}
+
+enum ServiceHealth {
+  HEALTHY
+  DEGRADED
+  DOWN
+  RATE_LIMITED
+  MAINTENANCE
+}
+
+enum CircuitState {
+  CLOSED
+  OPEN
+  HALF_OPEN
+}
+
+enum HttpMethod {
+  GET
+  POST
+  PUT
+  PATCH
+  DELETE
+}
+
+enum ApiLogStatus {
+  SUCCESS
+  ERROR
+  WARNING
+  RATE_LIMITED
+  TIMEOUT
+  AUTH_ERROR
+  VALIDATION_ERROR
+}
+
+// ============================================
+// PHASE 2 ENUMS - SOCIAL MEDIA
+// ============================================
+
+enum SocialPlatform {
+  INSTAGRAM
+  FACEBOOK
+  TIKTOK
+  TWITTER_X
+  LINKEDIN
+  YOUTUBE
+}
+
+enum SocialConnectionType {
+  MANAGED
+  BYOA
+}
+
+enum PostType {
+  IMAGE
+  CAROUSEL
+  VIDEO
+  REEL
+  STORY
+  LIVE
+  TEXT
+  LINK
+}
+
+enum PostPerformance {
+  TOP_PERFORMER
+  ABOVE_AVERAGE
+  AVERAGE
+  BELOW_AVERAGE
+  UNDERPERFORMING
+}
+
+// ============================================
+// PHASE 2 ENUMS - AI
+// ============================================
+
+enum AIPromptCategory {
+  MONTHLY_SUMMARY
+  WEEKLY_DIGEST
+  METRIC_ANALYSIS
+  TREND_DETECTION
+  ANOMALY_ALERT
+  RECOMMENDATION
+  COMPARISON
+  FORECAST
+  REVIEW_RESPONSE
+  CUSTOM
+}
+
+enum InsightPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  CUSTOM
+}
+
+enum InsightSentiment {
+  POSITIVE
+  NEUTRAL
+  CAUTIONARY
+  NEGATIVE
+}
+
+enum InsightUrgency {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum InsightTrigger {
+  SCHEDULED
+  USER_REQUESTED
+  ANOMALY
+  THRESHOLD
+}
+
+// ============================================
+// DAYPART METRICS (Finest grain - from POS)
+// ============================================
+
+model DaypartMetrics {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  date    DateTime @db.Date
+  daypart Daypart
+
+  // Sales
+  totalSales           Decimal @default(0) @db.Decimal(12, 2)
+  foodSales            Decimal @default(0) @db.Decimal(12, 2)
+  beverageSales        Decimal @default(0) @db.Decimal(12, 2)
+  alcoholSales         Decimal @default(0) @db.Decimal(12, 2)
+  beerSales            Decimal @default(0) @db.Decimal(12, 2)
+  wineSales            Decimal @default(0) @db.Decimal(12, 2)
+  liquorSales          Decimal @default(0) @db.Decimal(12, 2)
+  nonAlcoholicBevSales Decimal @default(0) @db.Decimal(12, 2)
+
+  // Covers & checks
+  covers     Int @default(0)
+  checkCount Int @default(0)
+
+  // Labor - FOH (Front of House)
+  fohLaborHours Decimal @default(0) @db.Decimal(8, 2)
+  fohLaborCost  Decimal @default(0) @db.Decimal(12, 2)
+
+  // Labor - BOH (Back of House)
+  bohLaborHours Decimal @default(0) @db.Decimal(8, 2)
+  bohLaborCost  Decimal @default(0) @db.Decimal(12, 2)
+
+  // Labor - Total (computed: foh + boh)
+  laborHours Decimal @default(0) @db.Decimal(8, 2)
+  laborCost  Decimal @default(0) @db.Decimal(12, 2)
+
+  // Calculated
+  ppa Decimal? @db.Decimal(10, 2) // Per Person Average
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, date, daypart])
+  @@index([locationId, date])
+}
+
+// ============================================
+// DAILY METRICS (Rolled up from dayparts)
+// ============================================
+
+model DailyMetrics {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  date      DateTime @db.Date
+  dayOfWeek Int      // 0=Sunday, 6=Saturday
+
+  // Sales (summed from dayparts)
+  totalSales           Decimal @default(0) @db.Decimal(12, 2)
+  foodSales            Decimal @default(0) @db.Decimal(12, 2)
+  beverageSales        Decimal @default(0) @db.Decimal(12, 2)
+  alcoholSales         Decimal @default(0) @db.Decimal(12, 2)
+  beerSales            Decimal @default(0) @db.Decimal(12, 2)
+  wineSales            Decimal @default(0) @db.Decimal(12, 2)
+  liquorSales          Decimal @default(0) @db.Decimal(12, 2)
+  nonAlcoholicBevSales Decimal @default(0) @db.Decimal(12, 2)
+
+  // Covers & checks
+  covers     Int @default(0)
+  checkCount Int @default(0)
+
+  // Reservation breakdown
+  reservationCovers Int @default(0)
+  walkInCovers      Int @default(0)
+  noShows           Int @default(0)
+
+  // Labor - FOH
+  fohLaborHours Decimal @default(0) @db.Decimal(8, 2)
+  fohLaborCost  Decimal @default(0) @db.Decimal(12, 2)
+
+  // Labor - BOH
+  bohLaborHours Decimal @default(0) @db.Decimal(8, 2)
+  bohLaborCost  Decimal @default(0) @db.Decimal(12, 2)
+
+  // Labor - Total
+  laborHours Decimal @default(0) @db.Decimal(8, 2)
+  laborCost  Decimal @default(0) @db.Decimal(12, 2)
+
+  // Food cost (from R365/MarginEdge, daily if available)
+  foodCost Decimal? @db.Decimal(12, 2)
+
+  // Calculated
+  ppa          Decimal? @db.Decimal(10, 2)
+  laborPercent Decimal? @db.Decimal(5, 2)
+
+  // Context - Weather
+  weatherId String?
+  weather   WeatherData? @relation(fields: [weatherId], references: [id])
+
+  // Context - Events (JSON array of event summaries)
+  eventsContext Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, date])
+  @@index([locationId, date])
+  @@index([date])
+}
+
+// ============================================
+// MONTHLY METRICS (Rolled up for health scores)
+// ============================================
+
+model MonthlyMetrics {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  month DateTime // First day of month (e.g., 2025-01-01)
+
+  // Sales (summed from daily)
+  totalSales           Decimal? @db.Decimal(12, 2)
+  foodSales            Decimal? @db.Decimal(12, 2)
+  beverageSales        Decimal? @db.Decimal(12, 2)
+  alcoholSales         Decimal? @db.Decimal(12, 2)
+  beerSales            Decimal? @db.Decimal(12, 2)
+  wineSales            Decimal? @db.Decimal(12, 2)
+  liquorSales          Decimal? @db.Decimal(12, 2)
+  nonAlcoholicBevSales Decimal? @db.Decimal(12, 2)
+
+  // Covers
+  totalCovers       Int?
+  reservationCovers Int?
+  walkInCovers      Int?
+  totalNoShows      Int?
+
+  // Labor - FOH
+  fohLaborHours Decimal? @db.Decimal(10, 2)
+  fohLaborCost  Decimal? @db.Decimal(12, 2)
+
+  // Labor - BOH
+  bohLaborHours Decimal? @db.Decimal(10, 2)
+  bohLaborCost  Decimal? @db.Decimal(12, 2)
+
+  // Labor - Total
+  laborHours Decimal? @db.Decimal(10, 2)
+  laborCost  Decimal? @db.Decimal(12, 2)
+
+  // Food cost
+  foodCost Decimal? @db.Decimal(12, 2)
+
+  // Calculated percentages
+  ppa          Decimal? @db.Decimal(10, 2)
+  primeCost    Decimal? @db.Decimal(5, 2) // (labor + food) / sales * 100
+  laborPercent Decimal? @db.Decimal(5, 2)
+  foodPercent  Decimal? @db.Decimal(5, 2)
+
+  // RevPASH (Revenue per Available Seat Hour)
+  revPash Decimal? @db.Decimal(10, 2)
+
+  // Operating days this month
+  operatingDays Int?
+
+  // Targets for this specific month (overrides HealthScoreConfig defaults)
+  targets Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, month])
+  @@index([locationId])
+  @@index([month])
+}
+
+// ============================================
+// CUSTOMER LOYALTY
+// ============================================
+
+model CustomerLoyalty {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  month DateTime // First day of month
+
+  // Visit frequency buckets
+  oneVisit         Int @default(0)
+  twoToFourVisits  Int @default(0)
+  fiveToNineVisits Int @default(0)
+  tenPlusVisits    Int @default(0)
+
+  // Total unique customers this month
+  uniqueCustomers Int @default(0)
+
+  // Calculated
+  repeatRate  Decimal? @db.Decimal(5, 2) // % with 2+ visits
+  loyaltyRate Decimal? @db.Decimal(5, 2) // % with 5+ visits
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, month])
+  @@index([locationId])
+}
+
+// ============================================
+// REVIEW (Individual reviews from BrightLocal)
+// ============================================
+
+model Review {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  // Source
+  platform    ReviewPlatform
+  externalId  String?
+  externalUrl String?
+
+  // Review content
+  rating       Int      // 1-5
+  reviewText   String?  @db.Text
+  reviewerName String?
+  reviewerUrl  String?
+
+  // Dates
+  reviewDate DateTime
+
+  // Owner response
+  responseText String?   @db.Text
+  responseDate DateTime?
+
+  // Sentiment (populated by AI analysis)
+  sentimentScore Decimal?       @db.Decimal(3, 2) // -1.00 to 1.00
+  sentimentLabel SentimentLabel?
+  keywords       String[]
+
+  // Sync tracking
+  syncedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, platform, externalId])
+  @@index([locationId, reviewDate])
+  @@index([locationId, platform])
+  @@index([rating])
+}
+
+// ============================================
+// REVIEW METRICS (Monthly aggregates)
+// ============================================
+
+model ReviewMetrics {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  month DateTime
+
+  // Counts
+  totalReviews Int @default(0) // Cumulative all-time as of this month
+  newReviews   Int @default(0) // New this month
+
+  // Rating distribution (new this month)
+  oneStarCount   Int @default(0)
+  twoStarCount   Int @default(0)
+  threeStarCount Int @default(0)
+  fourStarCount  Int @default(0)
+  fiveStarCount  Int @default(0)
+
+  // Averages
+  averageRating    Decimal? @db.Decimal(3, 2) // This month's average
+  cumulativeRating Decimal? @db.Decimal(3, 2) // All-time average
+
+  // Response metrics
+  responseCount        Int      @default(0)
+  responseRate         Decimal? @db.Decimal(5, 2)
+  avgResponseTimeHours Int?
+
+  // Sentiment summary
+  positiveCount Int @default(0)
+  neutralCount  Int @default(0)
+  negativeCount Int @default(0)
+
+  // By platform (JSON)
+  platformBreakdown Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, month])
+  @@index([locationId])
+}
+
+// ============================================
+// WEBSITE VISIBILITY & SEO
+// ============================================
+
+model WebsiteVisibility {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  month DateTime
+
+  // Overall visibility (from SEMrush)
+  visibilityScore Decimal? @db.Decimal(5, 2) // 0-100
+  organicKeywords Int?
+  organicTraffic  Int?
+
+  // Local rankings (from BrightLocal)
+  localPackRankings Json?
+  avgLocalRank      Decimal? @db.Decimal(4, 1)
+
+  // Tracked keywords detail
+  trackedKeywords Json?
+
+  // Google Business Profile metrics
+  gbpImpressions Int?
+  gbpClicks      Int?
+  gbpCalls       Int?
+  gbpDirections  Int?
+
+  // AI Platform Visibility (custom Prometheus processes)
+  aiVisibility   Json?    // { chatgpt: { mentioned: true, position: 2, query: "..." }, ... }
+  aiMentionCount Int?
+  aiPlatforms    String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, month])
+  @@index([locationId])
+}
+
+// ============================================
+// PR MENTIONS
+// ============================================
+
+model PRMention {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  // When
+  mentionDate DateTime @db.Date
+  month       DateTime // First day of month (for aggregation)
+
+  // What
+  outlet      String
+  title       String?
+  url         String?
+  mentionType MentionType
+
+  // Impact
+  reach     Int?
+  sentiment SentimentLabel?
+
+  // Tracking
+  enteredById String?
+  enteredBy   UserProfile? @relation(fields: [enteredById], references: [id])
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([locationId, month])
+  @@index([locationId, mentionDate])
+}
+
+// ============================================
+// HEALTH SCORE CONFIGURATION
+// ============================================
+
+model HealthScoreConfig {
+  id         String   @id @default(cuid())
+  locationId String   @unique
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  // Metric weights (must sum to 100)
+  weights Json
+  // Example:
+  // {
+  //   totalSales: 25,
+  //   primeCost: 20,
+  //   foodSales: 15,
+  //   laborCost: 12,
+  //   foodCost: 12,
+  //   beverageSales: 5,
+  //   alcoholSales: 3,
+  //   wineSales: 2,
+  //   beerSales: 1,
+  //   liquorSales: 1,
+  //   ppa: 5,
+  //   customerLoyalty: 5,
+  //   reviews: 4,
+  //   websiteVisibility: 2,
+  //   aiVisibility: 2,
+  //   socialMedia: 2,
+  //   prMentions: 1
+  // }
+
+  // Default targets (can be overridden per-month in MonthlyMetrics.targets)
+  targets Json
+  // Example:
+  // {
+  //   totalSales: 567694,
+  //   foodSales: 430000,
+  //   beverageSales: 100000,
+  //   alcoholSales: 80000,
+  //   wineSales: 35000,
+  //   beerSales: 15000,
+  //   liquorSales: 30000,
+  //   primeCost: 60,
+  //   laborCost: 30,
+  //   foodCost: 30,
+  //   ppa: 57,
+  //   customerLoyalty: 25,
+  //   reviews: 4.5,
+  //   prMentions: 3,
+  //   websiteVisibility: 80,
+  //   aiVisibility: 50,
+  //   socialMedia: 5
+  // }
+
+  // Metric direction (higher_better or lower_better)
+  metricDirections Json?
+  // Example:
+  // {
+  //   totalSales: "higher_better",
+  //   primeCost: "lower_better",
+  //   laborCost: "lower_better",
+  //   foodCost: "lower_better",
+  //   ...
+  // }
+
+  // EBITDA adjustments
+  ebitdaTarget        Decimal? @db.Decimal(12, 2)
+  ebitdaBonusPoints   Decimal? @db.Decimal(5, 2)
+  ebitdaPenaltyPoints Decimal? @db.Decimal(5, 2)
+
+  // Score thresholds for status colors
+  thresholds Json?
+  // {
+  //   excellent: 100,
+  //   good: 90,
+  //   warning: 80,
+  //   danger: 0
+  // }
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// HEALTH SCORE HISTORY
+// ============================================
+
+model HealthScoreHistory {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  month DateTime
+
+  // Overall score (weighted sum + EBITDA adjustment)
+  overallScore Decimal @db.Decimal(6, 2)
+
+  // Individual metric scores
+  metricScores Json
+  // Example:
+  // {
+  //   totalSales: { actual: 545000, target: 567694, score: 96.0, weighted: 24.0 },
+  //   primeCost: { actual: 58, target: 60, score: 103.4, weighted: 20.7 },
+  //   ...
+  // }
+
+  // Breakdown
+  baseScore        Decimal  @db.Decimal(6, 2) // Before EBITDA adjustment
+  ebitdaActual     Decimal? @db.Decimal(12, 2)
+  ebitdaAdjustment Decimal? @db.Decimal(5, 2)
+
+  // Trend (vs previous month)
+  previousScore Decimal? @db.Decimal(6, 2)
+  scoreDelta    Decimal? @db.Decimal(5, 2)
+  trend         Trend?
+
+  // Status based on thresholds
+  status HealthStatus
+
+  // Snapshot of weights/targets used (for historical accuracy)
+  configSnapshot Json?
+
+  calculatedAt DateTime @default(now())
+
+  @@unique([locationId, month])
+  @@index([locationId])
+  @@index([month])
+}
+
+// ============================================
+// WEATHER DATA (Open-Meteo)
+// ============================================
+
+model WeatherData {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  date DateTime @db.Date
+
+  // Temperature (Fahrenheit)
+  tempHigh      Float?
+  tempLow       Float?
+  tempAvg       Float?
+  feelsLikeHigh Float?
+  feelsLikeLow  Float?
+
+  // Precipitation
+  precipitation Float? // inches
+  precipProb    Float? // 0-100 probability
+  snowfall      Float? // inches
+
+  // Conditions
+  weatherCode Int?
+  condition   WeatherCondition?
+
+  // Wind & atmosphere
+  humidity   Float? // percentage
+  windSpeed  Float? // mph
+  windGusts  Float? // mph
+  cloudCover Float? // percentage
+  uvIndex    Float?
+
+  // Tracking
+  isActual     Boolean   @default(false) // true = observed, false = forecast
+  forecastedAt DateTime?
+
+  // Relation back to daily metrics
+  dailyMetrics DailyMetrics[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, date])
+  @@index([locationId, date])
+}
+
+// ============================================
+// LOCAL EVENTS
+// ============================================
+
+model LocalEvent {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  // Event details
+  name        String
+  description String?
+
+  // Timing
+  date       DateTime  @db.Date
+  startTime  DateTime?
+  endTime    DateTime?
+  isMultiDay Boolean   @default(false)
+  endDate    DateTime? @db.Date
+
+  // Venue
+  venueName     String?
+  venueAddress  String?
+  venueLat      Float?
+  venueLng      Float?
+  distanceMiles Float?
+
+  // Classification
+  category    EventCategory
+  subcategory String?
+
+  // Impact estimation
+  expectedAttendance Int?
+  venueCapacity      Int?
+  popularityScore    Float? // 0-1 from source API
+
+  // Calculated impact score (1-10)
+  impactScore Int?
+  impactLevel EventImpact?
+
+  // Source tracking
+  source      EventSource
+  externalId  String?
+  externalUrl String?
+
+  // Deduplication across sources
+  fingerprint String?
+
+  // Manual override
+  isManual    Boolean      @default(false)
+  enteredById String?
+  enteredBy   UserProfile? @relation(fields: [enteredById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, source, externalId])
+  @@index([locationId, date])
+  @@index([date])
+  @@index([fingerprint])
+  @@index([category])
+}
+
+// ============================================
+// HOLIDAYS (Shared lookup table)
+// ============================================
+
+model Holiday {
+  id String @id @default(cuid())
+
+  // Date
+  date DateTime @db.Date
+  year Int? // Null for recurring, specific year for one-time
+
+  // Details
+  name String
+  type HolidayType
+
+  // Impact
+  impactLevel EventImpact?
+  notes       String?
+
+  // Scope
+  isNational Boolean @default(true)
+  region     String? // "Texas", "San Antonio"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([date, name])
+  @@index([date])
+  @@index([type])
+}
+
+// ============================================
+// INTEGRATION (User-Connected)
+// ============================================
+
+model Integration {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  type IntegrationType
+
+  // Connection status
+  status IntegrationConnectionStatus @default(DISCONNECTED)
+
+  // OAuth tokens (encrypted at application layer)
+  accessToken    String?   @db.Text
+  refreshToken   String?   @db.Text
+  tokenExpiresAt DateTime?
+
+  // Token health tracking
+  tokenStatus           TokenStatus?
+  tokenExpiresWarningAt DateTime?
+  tokenRefreshAttempts  Int          @default(0)
+  tokenLastRefreshAt    DateTime?
+  tokenRefreshError     String?
+
+  // API key auth (for non-OAuth integrations)
+  apiKey    String? @db.Text
+  apiSecret String? @db.Text
+
+  // Integration-specific config
+  config Json?
+  // Examples:
+  // Toast: { restaurantGuid: "xxx", locationCode: "001" }
+  // OpenTable: { restaurantId: "12345" }
+  // R365: { companyId: "xxx", locationId: "yyy" }
+
+  // External IDs
+  externalId   String?
+  externalName String?
+
+  // Sync settings
+  syncEnabled       Boolean     @default(true)
+  lastSyncAt        DateTime?
+  lastSyncStatus    SyncStatus?
+  lastSyncError     String?
+  nextScheduledSync DateTime?
+
+  // Metadata
+  connectedAt   DateTime?
+  connectedById String?
+  connectedBy   UserProfile? @relation(fields: [connectedById], references: [id])
+
+  // Social accounts (for social integrations)
+  socialAccounts SocialAccount[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([locationId, type])
+  @@index([locationId])
+  @@index([type, status])
+}
+
+// ============================================
+// INTEGRATION STATUS (Managed + User APIs)
+// ============================================
+
+model IntegrationStatus {
+  id String @id @default(cuid())
+
+  service ApiService
+
+  // For user-connected: links to organization
+  // For managed: organizationId is null
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Health tracking
+  status           ServiceHealth @default(HEALTHY)
+  lastSuccessAt    DateTime?
+  lastErrorAt      DateTime?
+  lastErrorMessage String?
+  lastErrorCode    String?
+
+  // Circuit breaker
+  consecutiveFailures Int          @default(0)
+  circuitState        CircuitState @default(CLOSED)
+  circuitOpenedAt     DateTime?
+  circuitResetAt      DateTime?
+
+  // Sync tracking
+  lastSyncAt       DateTime?
+  lastSyncDuration Int?      // milliseconds
+  nextSyncAt       DateTime?
+  syncInProgress   Boolean   @default(false)
+
+  // Cost tracking (month-to-date)
+  mtdRequests Int     @default(0)
+  mtdCost     Decimal @default(0) @db.Decimal(10, 4)
+  mtdUnits    Int     @default(0)
+  costResetAt DateTime?
+
+  // Rate limit tracking
+  rateLimitRemaining Int?
+  rateLimitResetAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([service, organizationId])
+  @@index([service])
+  @@index([status])
+}
+
+// ============================================
+// API LOG
+// ============================================
+
+model ApiLog {
+  id String @id @default(cuid())
+
+  // What was called
+  service  ApiService
+  endpoint String
+  method   HttpMethod @default(GET)
+
+  // Context
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  locationId     String?
+  location       Location?     @relation(fields: [locationId], references: [id])
+
+  // Request
+  requestUrl     String @db.Text
+  requestBody    Json?
+  requestHeaders Json?
+
+  // Response
+  status            ApiLogStatus
+  httpStatus        Int?
+  responseBody      Json?
+  responseSizeBytes Int?
+
+  // Error details
+  errorMessage String?
+  errorCode    String?
+  errorStack   String? @db.Text
+
+  // Performance
+  latencyMs Int?
+
+  // Cost tracking
+  cost  Decimal? @db.Decimal(10, 6)
+  units Int?
+
+  // Retry tracking
+  attemptNumber Int     @default(1)
+  retryOfId     String?
+  willRetry     Boolean @default(false)
+
+  // Correlation
+  traceId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([service, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([locationId, createdAt])
+  @@index([status, createdAt])
+  @@index([traceId])
+}
+
+// ============================================
+// SOCIAL ACCOUNT
+// ============================================
+
+model SocialAccount {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  platform SocialPlatform
+
+  // Account details
+  accountId       String
+  accountName     String
+  accountUrl      String?
+  profileImageUrl String?
+
+  // Connection
+  connectionType SocialConnectionType
+  isConnected    Boolean @default(true)
+
+  // For BYOA (Sprout/Meta direct)
+  integrationId String?
+  integration   Integration? @relation(fields: [integrationId], references: [id])
+
+  // For managed (Metricool)
+  managedAccountRef String?
+
+  // Current follower snapshot
+  followers Int?
+  following Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  metrics SocialMetrics[]
+  posts   SocialPost[]
+
+  @@unique([locationId, platform, accountId])
+  @@index([locationId])
+  @@index([platform])
+}
+
+// ============================================
+// SOCIAL METRICS (Monthly Aggregates)
+// ============================================
+
+model SocialMetrics {
+  id              String        @id @default(cuid())
+  socialAccountId String
+  socialAccount   SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  month DateTime
+
+  // Audience
+  followersStart  Int?
+  followersEnd    Int?
+  followersGained Int?
+  followersLost   Int?
+  netFollowers    Int?
+
+  // Content
+  postsPublished   Int @default(0)
+  storiesPublished Int @default(0)
+  reelsPublished   Int @default(0)
+
+  // Engagement
+  totalImpressions Int @default(0)
+  totalReach       Int @default(0)
+  totalEngagements Int @default(0)
+  totalLikes       Int @default(0)
+  totalComments    Int @default(0)
+  totalShares      Int @default(0)
+  totalSaves       Int @default(0)
+
+  // Calculated rates
+  engagementRate Decimal? @db.Decimal(5, 2)
+  reachRate      Decimal? @db.Decimal(5, 2)
+
+  // Video metrics
+  totalVideoViews Int?
+  totalWatchTime  Int? // seconds
+  avgWatchTime    Decimal? @db.Decimal(8, 2)
+
+  // Stories metrics
+  storyViews   Int?
+  storyReplies Int?
+  storyExits   Int?
+
+  // Profile actions
+  profileVisits   Int?
+  websiteClicks   Int?
+  emailClicks     Int?
+  callClicks      Int?
+  directionClicks Int?
+
+  // Best performing content
+  topPosts Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([socialAccountId, month])
+  @@index([socialAccountId])
+  @@index([month])
+}
+
+// ============================================
+// SOCIAL POST (Individual)
+// ============================================
+
+model SocialPost {
+  id              String        @id @default(cuid())
+  socialAccountId String
+  socialAccount   SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  // Post identification
+  externalId String
+  postUrl    String?
+
+  // Content
+  postType  PostType
+  caption   String?  @db.Text
+  mediaUrls String[]
+  hashtags  String[]
+  mentions  String[]
+
+  // Timing
+  publishedAt DateTime
+
+  // Engagement metrics
+  impressions Int @default(0)
+  reach       Int @default(0)
+  likes       Int @default(0)
+  comments    Int @default(0)
+  shares      Int @default(0)
+  saves       Int @default(0)
+
+  // Video-specific
+  videoViews          Int?
+  videoWatchTime      Int? // seconds
+  videoCompletionRate Decimal? @db.Decimal(5, 2)
+
+  // Calculated
+  engagementRate Decimal? @db.Decimal(5, 2)
+
+  // Performance classification
+  performance PostPerformance?
+
+  // Sync tracking
+  lastSyncedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([socialAccountId, externalId])
+  @@index([socialAccountId, publishedAt])
+  @@index([postType])
+  @@index([performance])
+}
+
+// ============================================
+// AI PROMPT (Templates)
+// ============================================
+
+model AIPrompt {
+  id String @id @default(cuid())
+
+  // Scope
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Prompt details
+  name        String
+  slug        String
+  description String?
+
+  // Template
+  systemPrompt       String @db.Text
+  userPromptTemplate String @db.Text
+
+  // Classification
+  category AIPromptCategory
+
+  // Model settings
+  model       String  @default("claude-sonnet-4-5-20250929")
+  maxTokens   Int     @default(1024)
+  temperature Decimal @default(0.7) @db.Decimal(2, 1)
+
+  // Usage control
+  isActive    Boolean @default(true)
+  requiresPro Boolean @default(false)
+
+  // Versioning
+  version           Int     @default(1)
+  previousVersionId String?
+
+  // Relations
+  insights AIInsight[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([slug, organizationId])
+  @@index([organizationId])
+  @@index([category])
+  @@index([isActive])
+}
+
+// ============================================
+// AI INSIGHT (Generated Content)
+// ============================================
+
+model AIInsight {
+  id         String   @id @default(cuid())
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  promptId String
+  prompt   AIPrompt @relation(fields: [promptId], references: [id])
+
+  // Context
+  periodType  InsightPeriod
+  periodStart DateTime
+  periodEnd   DateTime
+
+  // Input data snapshot
+  inputData Json
+
+  // Generated content
+  title       String?
+  content     String  @db.Text
+  contentHtml String? @db.Text
+
+  // Structured insights
+  keyPoints       String[]
+  metrics         Json?
+  recommendations Json?
+
+  // Classification
+  sentiment InsightSentiment?
+  urgency   InsightUrgency?
+
+  // Trigger
+  triggerType   InsightTrigger?
+  generatedById String?
+  generatedBy   UserProfile?    @relation(fields: [generatedById], references: [id])
+
+  // Engagement
+  isRead       Boolean   @default(false)
+  readAt       DateTime?
+  isBookmarked Boolean   @default(false)
+  isDismissed  Boolean   @default(false)
+
+  // User feedback
+  feedbackRating Int?
+  feedbackNote   String?
+
+  // Generation metadata
+  model         String
+  promptVersion Int
+  tokensUsed    Int?
+  latencyMs     Int?
+  cost          Decimal? @db.Decimal(10, 6)
+
+  generatedAt DateTime @default(now())
+
+  // For scheduled regeneration
+  expiresAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([locationId, periodStart])
+  @@index([locationId, generatedAt])
+  @@index([promptId])
+  @@index([isRead, isDismissed])
+}
+
+// ============================================
+// AI USAGE (Monthly tracking per org)
+// ============================================
+
+model AIUsage {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  month DateTime
+
+  // Usage counts
+  insightsGenerated Int @default(0)
+  reviewResponses   Int @default(0)
+  customQueries     Int @default(0)
+  totalRuns         Int @default(0)
+
+  // Token usage
+  inputTokens  Int @default(0)
+  outputTokens Int @default(0)
+  totalTokens  Int @default(0)
+
+  // Cost
+  totalCost Decimal @default(0) @db.Decimal(10, 4)
+
+  // Plan limits
+  runsIncluded  Int
+  runsRemaining Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, month])
+  @@index([organizationId])
+  @@index([month])
+}
+
+// ============================================
+// DEMO FEEDBACK (Existing - preserve)
+// ============================================
+
+model DemoFeedback {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  email     String?
+  page      String
+  comment   String
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("demo_feedback")
 }
