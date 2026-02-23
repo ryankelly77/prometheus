@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
+  LayoutGrid,
   Target,
   Brain,
   DollarSign,
@@ -24,6 +25,7 @@ import { LocationSwitcher } from './location-switcher'
 // Icon mapping for dynamic icon rendering
 const iconMap: Record<string, LucideIcon> = {
   LayoutDashboard,
+  LayoutGrid,
   Target,
   Brain,
   DollarSign,
@@ -56,6 +58,7 @@ function isNavLink(item: NavItem): item is NavLinkItem {
 }
 
 const navigation: NavItem[] = [
+  { name: 'Overview', href: '/dashboard/overview', icon: 'LayoutGrid' },
   { name: 'Dashboard', href: '/dashboard', icon: 'LayoutDashboard' },
   { name: 'Health Score', href: '/dashboard/health-score', icon: 'Target' },
   { name: 'Intelligence', href: '/dashboard/intelligence', icon: 'Brain' },

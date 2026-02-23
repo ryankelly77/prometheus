@@ -15,6 +15,8 @@ interface LocationOverview {
   totalSalesMTD: number | null;
   salesTrend: number | null; // percentage change vs prior month
   priorMonthSales: number | null;
+  primeCost: number | null;
+  laborPercent: number | null;
 }
 
 interface GroupedLocations {
@@ -83,6 +85,8 @@ export async function GET() {
           select: {
             month: true,
             totalSales: true,
+            primeCost: true,
+            laborPercent: true,
           },
         },
       },
@@ -138,6 +142,14 @@ export async function GET() {
         salesTrend = ((totalSalesMTD - priorMonthSales) / priorMonthSales) * 100;
       }
 
+      // Get prime cost and labor percent from current month
+      const primeCost = currentMetrics?.primeCost
+        ? Number(currentMetrics.primeCost)
+        : null;
+      const laborPercent = currentMetrics?.laborPercent
+        ? Number(currentMetrics.laborPercent)
+        : null;
+
       return {
         id: loc.id,
         name: loc.name,
@@ -151,6 +163,8 @@ export async function GET() {
         totalSalesMTD,
         salesTrend: salesTrend !== null ? Math.round(salesTrend * 10) / 10 : null,
         priorMonthSales,
+        primeCost,
+        laborPercent,
       };
     });
 

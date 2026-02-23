@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import {
   LayoutDashboard,
+  LayoutGrid,
   Target,
   Brain,
   DollarSign,
@@ -25,10 +26,12 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip'
 import { LocationSwitcher } from './location-switcher'
+import { useLocation } from '@/hooks/use-location'
 
 // Icon mapping for dynamic icon rendering
 const iconMap: Record<string, LucideIcon> = {
   LayoutDashboard,
+  LayoutGrid,
   Target,
   Brain,
   DollarSign,
@@ -47,6 +50,7 @@ type NavLinkItem = {
   name: string
   href: string
   icon: string
+  singleLocationOnly?: boolean
 }
 
 type NavSeparatorItem = {
@@ -61,7 +65,8 @@ function isNavLink(item: NavItem): item is NavLinkItem {
 }
 
 const navigation: NavItem[] = [
-  { name: 'Dashboard', href: '/dashboard', icon: 'LayoutDashboard' },
+  { name: 'Overview', href: '/dashboard/overview', icon: 'LayoutGrid' },
+  { name: 'Dashboard', href: '/dashboard', icon: 'LayoutDashboard', singleLocationOnly: true },
   { name: 'Health Score', href: '/dashboard/health-score', icon: 'Target' },
   { name: 'Intelligence', href: '/dashboard/intelligence', icon: 'Brain' },
   { type: 'separator', label: 'Operations' },
@@ -87,6 +92,16 @@ interface SidebarProps {
 export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
+  const { locations } = useLocation()
+
+  // Filter navigation based on whether this is a multi-location account
+  const isMultiLocation = locations.length > 1
+  const filteredNavigation = navigation.filter((item) => {
+    if (isNavLink(item) && item.singleLocationOnly && isMultiLocation) {
+      return false
+    }
+    return true
+  })
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -129,7 +144,7 @@ export function Sidebar({ className }: SidebarProps) {
         {/* Main Navigation */}
         <ScrollArea className="flex-1">
           <nav className="space-y-1 p-3">
-            {navigation.map((item, index) => {
+            {filteredNavigation.map((item, index) => {
               if (!isNavLink(item)) {
                 return (
                   <div key={`sep-${index}`} className="py-2">

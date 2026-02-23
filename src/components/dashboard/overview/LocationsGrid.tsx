@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LocationCard, LocationData } from "./LocationCard";
@@ -18,8 +19,8 @@ interface LocationsGridProps {
 }
 
 export function LocationsGrid({ grouped, onLocationClick }: LocationsGridProps) {
+  const groups = Object.entries(grouped);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const groupIds = Object.keys(grouped);
 
   const toggleGroup = (groupId: string) => {
     setCollapsedGroups((prev) => {
@@ -34,18 +35,22 @@ export function LocationsGrid({ grouped, onLocationClick }: LocationsGridProps) 
   };
 
   // If only one group, don't show group headers
-  const showGroupHeaders = groupIds.length > 1;
-
-  if (!showGroupHeaders && groupIds.length === 1) {
-    const group = grouped[groupIds[0]];
+  if (groups.length === 1) {
+    const [, group] = groups[0];
     return (
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {group.locations.map((location) => (
-          <LocationCard
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {group.locations.map((location, index) => (
+          <motion.div
             key={location.id}
-            location={location}
-            onClick={() => onLocationClick(location.id)}
-          />
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.05, duration: 0.3 }}
+          >
+            <LocationCard
+              location={location}
+              onClick={() => onLocationClick(location.id)}
+            />
+          </motion.div>
         ))}
       </div>
     );
@@ -53,43 +58,53 @@ export function LocationsGrid({ grouped, onLocationClick }: LocationsGridProps) 
 
   return (
     <div className="space-y-6">
-      {groupIds.map((groupId) => {
-        const group = grouped[groupId];
+      {groups.map(([groupId, group]) => {
         const isCollapsed = collapsedGroups.has(groupId);
 
         return (
-          <div key={groupId}>
+          <div key={groupId} className="space-y-4">
             {/* Group Header */}
             <button
-              className="mb-3 flex w-full items-center gap-2 text-left"
               onClick={() => toggleGroup(groupId)}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors hover:bg-muted/50"
             >
               {isCollapsed ? (
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                <ChevronRight className="h-5 w-5 text-muted-foreground" />
               ) : (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                <ChevronDown className="h-5 w-5 text-muted-foreground" />
               )}
-              <h3 className="font-semibold">{group.groupName}</h3>
+              <h2 className="text-lg font-semibold">{group.groupName}</h2>
               <span className="text-sm text-muted-foreground">
-                ({group.locations.length})
+                ({group.locations.length} location{group.locations.length !== 1 ? "s" : ""})
               </span>
             </button>
 
             {/* Locations Grid */}
-            <div
-              className={cn(
-                "grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 transition-all",
-                isCollapsed && "hidden"
+            <AnimatePresence>
+              {!isCollapsed && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {group.locations.map((location, index) => (
+                    <motion.div
+                      key={location.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.05, duration: 0.3 }}
+                    >
+                      <LocationCard
+                        location={location}
+                        onClick={() => onLocationClick(location.id)}
+                      />
+                    </motion.div>
+                  ))}
+                </motion.div>
               )}
-            >
-              {group.locations.map((location) => (
-                <LocationCard
-                  key={location.id}
-                  location={location}
-                  onClick={() => onLocationClick(location.id)}
-                />
-              ))}
-            </div>
+            </AnimatePresence>
           </div>
         );
       })}

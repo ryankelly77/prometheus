@@ -57,6 +57,47 @@ async function getOrCreateAuthUser(email: string, fullName: string): Promise<str
   return data.user.id;
 }
 
+async function cleanupExistingData() {
+  console.log("🧹 Cleaning up existing data (preserving ryan@pearanalytics.com)...\n");
+
+  // Get ryan's user ID to preserve
+  const ryanProfile = await prisma.userProfile.findUnique({
+    where: { email: "ryan@pearanalytics.com" },
+  });
+
+  // Delete in order to respect foreign keys
+  await prisma.aIInsight.deleteMany({});
+  await prisma.healthScoreHistory.deleteMany({});
+  await prisma.healthScoreConfig.deleteMany({});
+  await prisma.monthlyMetrics.deleteMany({});
+  await prisma.reviewMetrics.deleteMany({});
+  await prisma.customerLoyalty.deleteMany({});
+  await prisma.websiteVisibility.deleteMany({});
+  await prisma.pRMention.deleteMany({});
+  await prisma.integration.deleteMany({});
+  await prisma.location.deleteMany({});
+  await prisma.restaurantGroup.deleteMany({});
+
+  // Delete user org memberships except ryan's
+  if (ryanProfile) {
+    await prisma.userOrganization.deleteMany({
+      where: { userId: { not: ryanProfile.id } },
+    });
+  } else {
+    await prisma.userOrganization.deleteMany({});
+  }
+
+  // Delete user profiles except ryan's
+  await prisma.userProfile.deleteMany({
+    where: { email: { not: "ryan@pearanalytics.com" } },
+  });
+
+  // Delete organizations
+  await prisma.organization.deleteMany({});
+
+  console.log("  ✓ Cleanup complete\n");
+}
+
 async function main() {
   console.log("🌱 Seeding database...\n");
 
@@ -65,19 +106,20 @@ async function main() {
     throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
   }
 
-  // ==========================================================================
-  // 1. DEMO ORGANIZATION
-  // ==========================================================================
-  console.log("Creating demo organization...");
+  // Clean up existing data first
+  await cleanupExistingData();
 
-  const demoOrg = await prisma.organization.upsert({
-    where: { slug: "demo" },
-    update: {},
-    create: {
-      name: "Prometheus Demo",
-      slug: "demo",
-      primaryColor: "#6366f1",
-      accentColor: "#8b5cf6",
+  // ==========================================================================
+  // 1. ORGANIZATION
+  // ==========================================================================
+  console.log("Creating organization...");
+
+  const org = await prisma.organization.create({
+    data: {
+      name: "Southerleigh Hospitality Group",
+      slug: "southerleigh",
+      primaryColor: "#1e3a5f",
+      accentColor: "#c9a962",
       darkMode: true,
       plan: "ENTERPRISE",
       planSeats: 50,
@@ -86,35 +128,22 @@ async function main() {
     },
   });
 
-  console.log(`  ✓ Organization: ${demoOrg.name} (${demoOrg.slug})`);
+  console.log(`  ✓ Organization: ${org.name} (${org.slug})`);
 
   // ==========================================================================
-  // 2. RESTAURANT GROUPS
+  // 2. RESTAURANT GROUP
   // ==========================================================================
-  console.log("\nCreating restaurant groups...");
+  console.log("\nCreating restaurant group...");
 
-  const fineGroup = await prisma.restaurantGroup.upsert({
-    where: { id: "group-fine-dining" },
-    update: {},
-    create: {
-      id: "group-fine-dining",
-      organizationId: demoOrg.id,
-      name: "Fine Dining Collection",
+  const group = await prisma.restaurantGroup.create({
+    data: {
+      id: "group-southerleigh-concepts",
+      organizationId: org.id,
+      name: "Southerleigh Concepts",
     },
   });
 
-  const casualGroup = await prisma.restaurantGroup.upsert({
-    where: { id: "group-casual" },
-    update: {},
-    create: {
-      id: "group-casual",
-      organizationId: demoOrg.id,
-      name: "Casual Concepts",
-    },
-  });
-
-  console.log(`  ✓ Group: ${fineGroup.name}`);
-  console.log(`  ✓ Group: ${casualGroup.name}`);
+  console.log(`  ✓ Group: ${group.name}`);
 
   // ==========================================================================
   // 3. LOCATIONS
@@ -123,78 +152,63 @@ async function main() {
 
   const locations = [
     {
-      id: "loc-steakhouse-downtown",
-      restaurantGroupId: fineGroup.id,
-      name: "The Capital Grille - Downtown",
-      address: "123 Main Street",
-      city: "Chicago",
-      state: "IL",
-      zipCode: "60601",
-      latitude: 41.8781,
-      longitude: -87.6298,
+      id: "loc-southerleigh-brewery",
+      restaurantGroupId: group.id,
+      name: "Southerleigh Fine Food & Brewery",
+      address: "136 E Grayson St, Pearl District",
+      city: "San Antonio",
+      state: "TX",
+      zipCode: "78215",
+      latitude: 29.4438,
+      longitude: -98.4813,
       timezone: "America/Chicago",
-      conceptType: "Steakhouse",
+      conceptType: "Brewery & Restaurant",
       isDefault: true,
     },
     {
-      id: "loc-steakhouse-north",
-      restaurantGroupId: fineGroup.id,
-      name: "The Capital Grille - North Shore",
-      address: "456 Lake Avenue",
-      city: "Wilmette",
-      state: "IL",
-      zipCode: "60091",
-      latitude: 42.0722,
-      longitude: -87.7294,
+      id: "loc-southerleigh-haute-south",
+      restaurantGroupId: group.id,
+      name: "Southerleigh Haute South",
+      address: "17619 La Cantera Pkwy, The Rim",
+      city: "San Antonio",
+      state: "TX",
+      zipCode: "78257",
+      latitude: 29.5996,
+      longitude: -98.6194,
       timezone: "America/Chicago",
-      conceptType: "Steakhouse",
+      conceptType: "Southern Cuisine",
     },
     {
-      id: "loc-italian",
-      restaurantGroupId: fineGroup.id,
-      name: "Osteria Via Stato",
-      address: "789 State Street",
-      city: "Chicago",
-      state: "IL",
-      zipCode: "60610",
-      latitude: 41.8925,
-      longitude: -87.6283,
+      id: "loc-mon-chou-chou",
+      restaurantGroupId: group.id,
+      name: "Brasserie Mon Chou Chou",
+      address: "312 Pearl Pkwy, Pearl District",
+      city: "San Antonio",
+      state: "TX",
+      zipCode: "78215",
+      latitude: 29.4427,
+      longitude: -98.4786,
       timezone: "America/Chicago",
-      conceptType: "Italian",
+      conceptType: "French Brasserie",
     },
     {
-      id: "loc-bistro",
-      restaurantGroupId: casualGroup.id,
-      name: "The Publican",
-      address: "321 Fulton Market",
-      city: "Chicago",
-      state: "IL",
-      zipCode: "60661",
-      latitude: 41.8867,
-      longitude: -87.6487,
+      id: "loc-boilerhouse",
+      restaurantGroupId: group.id,
+      name: "BoilerHouse Texas Grill & Wine Garden",
+      address: "312 Pearl Pkwy Bldg 3, Pearl District",
+      city: "San Antonio",
+      state: "TX",
+      zipCode: "78215",
+      latitude: 29.4431,
+      longitude: -98.4791,
       timezone: "America/Chicago",
-      conceptType: "Gastropub",
-    },
-    {
-      id: "loc-cafe",
-      restaurantGroupId: casualGroup.id,
-      name: "Beatrix - River North",
-      address: "519 N Clark Street",
-      city: "Chicago",
-      state: "IL",
-      zipCode: "60654",
-      latitude: 41.8915,
-      longitude: -87.6311,
-      timezone: "America/Chicago",
-      conceptType: "All-Day Cafe",
+      conceptType: "Texas Grill",
     },
   ];
 
   for (const loc of locations) {
-    await prisma.location.upsert({
-      where: { id: loc.id },
-      update: {},
-      create: loc,
+    await prisma.location.create({
+      data: loc,
     });
     console.log(`  ✓ Location: ${loc.name}`);
   }
@@ -211,26 +225,21 @@ async function main() {
       role: "SUPER_ADMIN",
     },
     {
-      email: "partner@demo.prometheus.app",
-      fullName: "Pat Partner",
+      email: "partner@southerleigh.com",
+      fullName: "Jeff Balfour",
       role: "PARTNER_ADMIN",
     },
     {
-      email: "manager@demo.prometheus.app",
-      fullName: "Morgan Manager",
+      email: "manager@southerleigh.com",
+      fullName: "Sarah Manager",
       role: "GROUP_ADMIN",
-      restaurantGroupIds: [fineGroup.id],
+      restaurantGroupIds: [group.id],
     },
     {
-      email: "location@demo.prometheus.app",
-      fullName: "Lou Location",
+      email: "brewery@southerleigh.com",
+      fullName: "Mike Brewery",
       role: "LOCATION_MANAGER",
-      locationIds: ["loc-steakhouse-downtown"],
-    },
-    {
-      email: "viewer@demo.prometheus.app",
-      fullName: "Val Viewer",
-      role: "VIEWER",
+      locationIds: ["loc-southerleigh-brewery"],
     },
   ];
 
@@ -273,7 +282,7 @@ async function main() {
       where: {
         userId_organizationId: {
           userId: profile.id,
-          organizationId: demoOrg.id,
+          organizationId: org.id,
         },
       },
       update: {
@@ -283,7 +292,7 @@ async function main() {
       },
       create: {
         userId: profile.id,
-        organizationId: demoOrg.id,
+        organizationId: org.id,
         role: user.role,
         restaurantGroupIds: user.restaurantGroupIds || [],
         locationIds: user.locationIds || [],
@@ -314,23 +323,30 @@ async function main() {
     beerSales: 0.3,
   };
 
+  // Location-specific targets
+  const locationTargets: Record<string, { totalSales: number; ppa: number }> = {
+    "loc-southerleigh-brewery": { totalSales: 750000, ppa: 75 },
+    "loc-southerleigh-haute-south": { totalSales: 650000, ppa: 80 },
+    "loc-mon-chou-chou": { totalSales: 550000, ppa: 95 },
+    "loc-boilerhouse": { totalSales: 600000, ppa: 85 },
+  };
+
   for (const loc of locations) {
-    await prisma.healthScoreConfig.upsert({
-      where: { locationId: loc.id },
-      update: {},
-      create: {
+    const targets = locationTargets[loc.id] || { totalSales: 500000, ppa: 80 };
+    await prisma.healthScoreConfig.create({
+      data: {
         locationId: loc.id,
         weights: defaultWeights,
         targets: {
-          totalSales: 500000,
-          foodSales: 300000,
-          alcoholSales: 150000,
-          wineSales: 75000,
-          beerSales: 25000,
+          totalSales: targets.totalSales,
+          foodSales: targets.totalSales * 0.6,
+          alcoholSales: targets.totalSales * 0.35,
+          wineSales: targets.totalSales * 0.15,
+          beerSales: targets.totalSales * 0.08,
           laborCostPercent: 28,
           foodCostPercent: 30,
           primeCostPercent: 58,
-          ppa: 85,
+          ppa: targets.ppa,
           customerLoyaltyPercent: 35,
           averageRating: 4.5,
           reviewCount: 50,
@@ -349,75 +365,395 @@ async function main() {
   }
 
   // ==========================================================================
-  // 6. SAMPLE MONTHLY METRICS (last 3 months)
+  // 6. MONTHLY METRICS (current month and 2 prior months)
   // ==========================================================================
-  console.log("\nCreating sample monthly metrics...");
+  console.log("\nCreating monthly metrics...");
 
-  const months = ["2025-01", "2024-12", "2024-11"];
+  // Use current date to generate relative months
+  const now = new Date();
+  const currentMonthDate = new Date(now.getFullYear(), now.getMonth(), 1);
+  const priorMonth1Date = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const priorMonth2Date = new Date(now.getFullYear(), now.getMonth() - 2, 1);
 
-  for (const loc of locations.slice(0, 2)) {
-    // Only first 2 locations for demo
-    for (const monthStr of months) {
-      const baseRevenue = 450000 + Math.random() * 100000;
-      const monthDate = new Date(`${monthStr}-01`);
+  const months = [
+    { date: priorMonth2Date, label: `${priorMonth2Date.toLocaleString('default', { month: 'short' })} ${priorMonth2Date.getFullYear()}` },
+    { date: priorMonth1Date, label: `${priorMonth1Date.toLocaleString('default', { month: 'short' })} ${priorMonth1Date.getFullYear()}` },
+    { date: currentMonthDate, label: `${currentMonthDate.toLocaleString('default', { month: 'short' })} ${currentMonthDate.getFullYear()}` },
+  ];
 
-      await prisma.monthlyMetrics.upsert({
-        where: {
-          locationId_month: {
-            locationId: loc.id,
-            month: monthDate,
-          },
-        },
-        update: {},
-        create: {
+  // Location-specific data profiles with exact metrics
+  interface LocationProfile {
+    baseSales: number;
+    trend: number;  // percentage change per month
+    laborPercent: number;
+    foodCostPercent: number;
+    primeCost: number;
+    foodSalesPercent: number;
+    ppaTarget: number;
+    beerSalesPercent: number;  // of beverage sales
+    wineSalesPercent: number;  // of beverage sales
+  }
+
+  const locationProfiles: Record<string, LocationProfile> = {
+    // Southerleigh Fine Food & Brewery - Flagship brewpub
+    // Health Score: 94% (Good), strong beer sales
+    "loc-southerleigh-brewery": {
+      baseSales: 720000,
+      trend: 0.032,  // +3.2%
+      laborPercent: 0.29,
+      foodCostPercent: 0.30,
+      primeCost: 59,
+      foodSalesPercent: 0.58,
+      ppaTarget: 78,
+      beerSalesPercent: 0.45,  // Strong beer (brewpub)
+      wineSalesPercent: 0.20,
+    },
+    // Brasserie Mon Chou Chou - French brasserie
+    // Health Score: 102% (Excellent), best performer, high wine sales
+    "loc-mon-chou-chou": {
+      baseSales: 580000,
+      trend: 0.081,  // +8.1%
+      laborPercent: 0.27,
+      foodCostPercent: 0.28,
+      primeCost: 55,
+      foodSalesPercent: 0.55,
+      ppaTarget: 95,
+      beerSalesPercent: 0.15,
+      wineSalesPercent: 0.55,  // High wine sales (French)
+    },
+    // BoilerHouse Texas Grill & Wine Garden
+    // Health Score: 87% (Warning), labor costs too high
+    "loc-boilerhouse": {
+      baseSales: 650000,
+      trend: -0.024,  // -2.4%
+      laborPercent: 0.32,  // Too high!
+      foodCostPercent: 0.32,  // Also high
+      primeCost: 64,  // Over target
+      foodSalesPercent: 0.60,
+      ppaTarget: 85,
+      beerSalesPercent: 0.25,
+      wineSalesPercent: 0.45,  // Good wine program
+    },
+    // Southerleigh Haute South - Newer location
+    // Health Score: 91% (Good), ramping up
+    "loc-southerleigh-haute-south": {
+      baseSales: 480000,
+      trend: 0.018,  // +1.8%
+      laborPercent: 0.30,
+      foodCostPercent: 0.31,
+      primeCost: 61,
+      foodSalesPercent: 0.62,
+      ppaTarget: 72,
+      beerSalesPercent: 0.30,
+      wineSalesPercent: 0.25,
+    },
+  };
+
+  for (const loc of locations) {
+    const profile = locationProfiles[loc.id];
+
+    for (let i = 0; i < months.length; i++) {
+      const month = months[i];
+      const monthDate = month.date;
+
+      // Calculate sales with trend (apply trend progressively)
+      const trendMultiplier = 1 + (profile.trend * (i - 1)); // i=0 is 2 months ago, i=2 is current
+      const totalSales = Math.round(profile.baseSales * trendMultiplier);
+
+      const foodSales = Math.round(totalSales * profile.foodSalesPercent);
+      const beverageSales = totalSales - foodSales;
+
+      const laborCost = Math.round(totalSales * profile.laborPercent);
+      const foodCost = Math.round(foodSales * profile.foodCostPercent);
+
+      const covers = Math.floor(totalSales / profile.ppaTarget);
+      const ppa = Math.round((totalSales / covers) * 100) / 100;
+
+      // Beverage breakdown
+      const alcoholSales = Math.round(beverageSales * 0.88);
+      const wineSales = Math.round(beverageSales * profile.wineSalesPercent);
+      const beerSales = Math.round(beverageSales * profile.beerSalesPercent);
+      const liquorSales = alcoholSales - wineSales - beerSales;
+      const nonAlcoholicBevSales = beverageSales - alcoholSales;
+
+      await prisma.monthlyMetrics.create({
+        data: {
           locationId: loc.id,
           month: monthDate,
-
-          // Sales
-          totalSales: baseRevenue,
-          foodSales: baseRevenue * 0.6,
-          beverageSales: baseRevenue * 0.4,
-          alcoholSales: baseRevenue * 0.35,
-          wineSales: baseRevenue * 0.15,
-          beerSales: baseRevenue * 0.08,
-          liquorSales: baseRevenue * 0.12,
-          nonAlcoholicBevSales: baseRevenue * 0.05,
-
-          // Covers
-          totalCovers: Math.floor(baseRevenue / 85),
-          reservationCovers: Math.floor((baseRevenue / 85) * 0.7),
-          walkInCovers: Math.floor((baseRevenue / 85) * 0.3),
-
-          // Labor
-          fohLaborCost: baseRevenue * 0.12,
-          bohLaborCost: baseRevenue * 0.16,
-          laborCost: baseRevenue * 0.28,
-
-          // Food cost
-          foodCost: baseRevenue * 0.3,
-
-          // Calculated
-          ppa: 85,
-          primeCost: 58,
-          laborPercent: 28,
-          foodPercent: 30,
-          revPash: baseRevenue / (200 * 30 * 5), // seats * days * hours
-
-          operatingDays: 30,
+          totalSales,
+          foodSales,
+          beverageSales,
+          alcoholSales,
+          wineSales,
+          beerSales,
+          liquorSales,
+          nonAlcoholicBevSales,
+          totalCovers: covers,
+          reservationCovers: Math.floor(covers * 0.65),
+          walkInCovers: Math.floor(covers * 0.35),
+          fohLaborCost: Math.round(laborCost * 0.45),
+          bohLaborCost: Math.round(laborCost * 0.55),
+          laborCost,
+          foodCost,
+          ppa,
+          primeCost: profile.primeCost,
+          laborPercent: Math.round(profile.laborPercent * 100),
+          foodPercent: Math.round(profile.foodCostPercent * 100),
+          revPash: Math.round((totalSales / (150 * 30 * 6)) * 100) / 100,
+          operatingDays: monthDate.getMonth() === 1 ? 28 : 30,
         },
       });
     }
-    console.log(`  ✓ MonthlyMetrics: ${loc.name} (${months.length} months)`);
+    console.log(`  ✓ MonthlyMetrics: ${loc.name} (3 months)`);
   }
 
   // ==========================================================================
-  // 7. SAMPLE HOLIDAYS
+  // 7. HEALTH SCORE HISTORY
+  // ==========================================================================
+  console.log("\nCreating health score history...");
+
+  // Health scores matching the location profiles (current month is last value)
+  const healthScores: Record<string, number[]> = {
+    "loc-southerleigh-brewery": [91, 93, 94],       // Good, improving → 94%
+    "loc-mon-chou-chou": [96, 99, 102],             // Excellent, best performer → 102%
+    "loc-boilerhouse": [90, 88, 87],                // Warning, declining → 87%
+    "loc-southerleigh-haute-south": [89, 90, 91],   // Good, ramping up → 91%
+  };
+
+  function getHealthStatus(score: number): "EXCELLENT" | "GOOD" | "WARNING" | "DANGER" {
+    if (score >= 100) return "EXCELLENT";
+    if (score >= 90) return "GOOD";
+    if (score >= 80) return "WARNING";
+    return "DANGER";
+  }
+
+  for (const loc of locations) {
+    const scores = healthScores[loc.id];
+
+    for (let i = 0; i < months.length; i++) {
+      const monthDate = months[i].date;
+      const score = scores[i];
+      const previousScore = i > 0 ? scores[i - 1] : null;
+
+      await prisma.healthScoreHistory.create({
+        data: {
+          locationId: loc.id,
+          month: monthDate,
+          overallScore: score,
+          baseScore: score,
+          status: getHealthStatus(score),
+          previousScore: previousScore,
+          scoreDelta: previousScore ? score - previousScore : null,
+          trend: previousScore ? (score > previousScore ? "UP" : score < previousScore ? "DOWN" : "FLAT") : null,
+          metricScores: {
+            totalSales: { score: score + Math.random() * 5 - 2.5, weight: 30, weighted: (score * 0.3) },
+            primeCost: { score: score + Math.random() * 5 - 2.5, weight: 25, weighted: (score * 0.25) },
+            foodSales: { score: score + Math.random() * 5 - 2.5, weight: 20.4, weighted: (score * 0.204) },
+          },
+          calculatedAt: monthDate,
+        },
+      });
+    }
+    console.log(`  ✓ HealthScoreHistory: ${loc.name}`);
+  }
+
+  // ==========================================================================
+  // 8. AI PROMPT (required for insights)
+  // ==========================================================================
+  console.log("\nCreating AI prompt...");
+
+  const aiPrompt = await prisma.aIPrompt.create({
+    data: {
+      organizationId: org.id,
+      name: "System Generated Insight",
+      slug: "system-insight",
+      description: "Auto-generated insights from Prometheus analytics",
+      systemPrompt: "You are a restaurant analytics assistant.",
+      userPromptTemplate: "Analyze the following metrics and provide insights.",
+      category: "METRIC_ANALYSIS",
+      model: "claude-sonnet-4-5-20250929",
+      maxTokens: 1024,
+      isActive: true,
+      version: 1,
+    },
+  });
+  console.log(`  ✓ AIPrompt: ${aiPrompt.name}`);
+
+  // ==========================================================================
+  // 9. AI INSIGHTS
+  // ==========================================================================
+  console.log("\nCreating AI insights...");
+
+  const insightsData: Array<{
+    locationId: string;
+    insights: Array<{
+      title: string;
+      content: string;
+      urgency: "HIGH" | "MEDIUM" | "LOW" | "INFO";
+      sentiment: "POSITIVE" | "NEUTRAL" | "CAUTIONARY" | "NEGATIVE";
+      hoursAgo: number;
+    }>;
+  }> = [
+    {
+      locationId: "loc-southerleigh-brewery",
+      insights: [
+        {
+          title: "Labor costs trending above target",
+          content: "Labor costs exceeded target by 8% this month, primarily driven by overtime in the kitchen. Consider reviewing scheduling efficiency.",
+          urgency: "HIGH",
+          sentiment: "CAUTIONARY",
+          hoursAgo: 2,
+        },
+        {
+          title: "Strong weekend performance",
+          content: "Weekend dinner covers up 12% vs last month. Friday and Saturday are showing consistent growth.",
+          urgency: "LOW",
+          sentiment: "POSITIVE",
+          hoursAgo: 18,
+        },
+        {
+          title: "Beer sales outperforming",
+          content: "House-brewed beers now represent 35% of beverage sales, up from 28% last quarter. Consider expanding tap selection.",
+          urgency: "INFO",
+          sentiment: "POSITIVE",
+          hoursAgo: 48,
+        },
+      ],
+    },
+    {
+      locationId: "loc-southerleigh-haute-south",
+      insights: [
+        {
+          title: "Review response rate declining",
+          content: "Google review response rate dropped below 50%. Aim to respond to all reviews within 24 hours to maintain engagement.",
+          urgency: "MEDIUM",
+          sentiment: "CAUTIONARY",
+          hoursAgo: 5,
+        },
+        {
+          title: "Lunch covers underperforming",
+          content: "Weekday lunch traffic down 15% compared to same period last year. Consider lunch specials or marketing push.",
+          urgency: "HIGH",
+          sentiment: "NEGATIVE",
+          hoursAgo: 12,
+        },
+        {
+          title: "Private events driving revenue",
+          content: "Private event bookings up 25% this quarter, contributing an additional $45K in revenue.",
+          urgency: "LOW",
+          sentiment: "POSITIVE",
+          hoursAgo: 72,
+        },
+      ],
+    },
+    {
+      locationId: "loc-mon-chou-chou",
+      insights: [
+        {
+          title: "Food cost improvement",
+          content: "Food cost improved 2.1% after menu price adjustment. New pricing strategy is showing results without impacting covers.",
+          urgency: "LOW",
+          sentiment: "POSITIVE",
+          hoursAgo: 8,
+        },
+        {
+          title: "Wine program excellence",
+          content: "Wine sales per cover increased 18% following sommelier training program. Guest wine attachment rate now at 42%.",
+          urgency: "INFO",
+          sentiment: "POSITIVE",
+          hoursAgo: 24,
+        },
+        {
+          title: "Brunch service opportunity",
+          content: "Weekend brunch shows 94% table utilization. Consider adding Thursday brunch service to capture demand.",
+          urgency: "MEDIUM",
+          sentiment: "NEUTRAL",
+          hoursAgo: 36,
+        },
+        {
+          title: "High guest satisfaction",
+          content: "Average Google rating increased to 4.7 stars with 89% positive sentiment in recent reviews.",
+          urgency: "INFO",
+          sentiment: "POSITIVE",
+          hoursAgo: 96,
+        },
+      ],
+    },
+    {
+      locationId: "loc-boilerhouse",
+      insights: [
+        {
+          title: "Prime cost at target",
+          content: "Prime cost holding steady at 57.8%, just under the 58% target. Strong operational discipline this month.",
+          urgency: "LOW",
+          sentiment: "POSITIVE",
+          hoursAgo: 4,
+        },
+        {
+          title: "Wine inventory adjustment needed",
+          content: "Several high-margin wines approaching optimal drinking windows. Consider featuring in wine dinner or promotion.",
+          urgency: "MEDIUM",
+          sentiment: "NEUTRAL",
+          hoursAgo: 16,
+        },
+        {
+          title: "PPA growth opportunity",
+          content: "Current PPA of $82 is below $85 target. Upselling training could help close the gap.",
+          urgency: "MEDIUM",
+          sentiment: "CAUTIONARY",
+          hoursAgo: 28,
+        },
+        {
+          title: "Patio season preparation",
+          content: "Historical data shows 30% revenue increase during patio season. Ensure staffing plan accounts for March uptick.",
+          urgency: "INFO",
+          sentiment: "NEUTRAL",
+          hoursAgo: 120,
+        },
+      ],
+    },
+  ];
+
+  const insightNow = new Date();
+
+  for (const locationInsights of insightsData) {
+    for (const insight of locationInsights.insights) {
+      const generatedAt = new Date(insightNow.getTime() - insight.hoursAgo * 60 * 60 * 1000);
+
+      await prisma.aIInsight.create({
+        data: {
+          locationId: locationInsights.locationId,
+          promptId: aiPrompt.id,
+          periodType: "MONTHLY",
+          periodStart: currentMonthDate,
+          periodEnd: new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth() + 1, 0),
+          inputData: {},
+          title: insight.title,
+          content: insight.content,
+          keyPoints: [insight.content.split(".")[0] + "."],
+          urgency: insight.urgency,
+          sentiment: insight.sentiment,
+          triggerType: "SCHEDULED",
+          model: "claude-3-opus",
+          promptVersion: 1,
+          generatedAt,
+        },
+      });
+    }
+    console.log(`  ✓ AIInsights: ${locationInsights.locationId} (${locationInsights.insights.length} insights)`);
+  }
+
+  // ==========================================================================
+  // 10. SAMPLE HOLIDAYS
   // ==========================================================================
   console.log("\nCreating sample holidays...");
 
   const holidays = [
     { date: "2025-01-01", name: "New Year's Day", type: "FEDERAL" as const, isNational: true },
     { date: "2025-02-14", name: "Valentine's Day", type: "COMMERCIAL" as const, isNational: true },
+    { date: "2025-03-02", name: "Texas Independence Day", type: "STATE" as const, isNational: false },
+    { date: "2025-04-21", name: "San Jacinto Day", type: "STATE" as const, isNational: false },
+    { date: "2025-05-05", name: "Cinco de Mayo", type: "COMMERCIAL" as const, isNational: true },
     { date: "2025-05-11", name: "Mother's Day", type: "COMMERCIAL" as const, isNational: true },
     { date: "2025-06-15", name: "Father's Day", type: "COMMERCIAL" as const, isNational: true },
     { date: "2025-07-04", name: "Independence Day", type: "FEDERAL" as const, isNational: true },
@@ -450,12 +786,14 @@ async function main() {
 
   // Print summary
   console.log("Summary:");
-  console.log(`  Organizations: 1`);
-  console.log(`  Restaurant Groups: 2`);
+  console.log(`  Organization: Southerleigh Hospitality Group`);
+  console.log(`  Restaurant Groups: 1 (Southerleigh Concepts)`);
   console.log(`  Locations: ${locations.length}`);
   console.log(`  Users: ${users.length}`);
   console.log(`  Health Score Configs: ${locations.length}`);
-  console.log(`  Monthly Metrics: ${locations.slice(0, 2).length * months.length}`);
+  console.log(`  Monthly Metrics: ${locations.length * months.length}`);
+  console.log(`  Health Score History: ${locations.length * months.length}`);
+  console.log(`  AI Insights: ${insightsData.reduce((sum, l) => sum + l.insights.length, 0)}`);
   console.log(`  Holidays: ${holidays.length}`);
   console.log(`\n📝 Demo user password: ${DEFAULT_PASSWORD}`);
 }
