@@ -1,5 +1,4 @@
 import prisma from '../src/lib/prisma';
-import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 
 const EMAIL = "ryan@pearanalytics.com";
