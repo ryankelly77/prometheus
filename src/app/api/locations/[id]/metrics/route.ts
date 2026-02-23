@@ -39,13 +39,13 @@ export async function GET(
       );
     }
 
-    // Get current and prior months
+    // Get current and prior months (use UTC to match database)
     const now = new Date();
-    const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const priorMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const currentYear = now.getUTCFullYear();
+    const currentMonthNum = now.getUTCMonth();
 
     // Fetch monthly metrics (last 12 months)
-    const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const twelveMonthsAgo = new Date(Date.UTC(currentYear, currentMonthNum - 11, 1));
 
     const monthlyMetrics = await prisma.monthlyMetrics.findMany({
       where: {
@@ -59,12 +59,14 @@ export async function GET(
       },
     });
 
-    // Get current month metrics
+    // Get current month metrics (compare year/month to avoid timezone issues)
     const currentMetrics = monthlyMetrics.find(
-      (m) => m.month.getTime() === currentMonth.getTime()
+      (m) => m.month.getUTCFullYear() === currentYear &&
+             m.month.getUTCMonth() === currentMonthNum
     );
     const priorMetrics = monthlyMetrics.find(
-      (m) => m.month.getTime() === priorMonth.getTime()
+      (m) => m.month.getUTCFullYear() === (currentMonthNum === 0 ? currentYear - 1 : currentYear) &&
+             m.month.getUTCMonth() === (currentMonthNum === 0 ? 11 : currentMonthNum - 1)
     );
 
     // Calculate trends
