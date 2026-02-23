@@ -9,7 +9,7 @@
 - **Database:** Supabase (PostgreSQL) + Prisma ORM
 - **Auth:** Supabase Auth with RLS
 - **UI:** shadcn/ui + Radix UI + Tailwind CSS v4
-- **Charts:** Tremor + Recharts
+- **Charts:** Recharts
 - **Animations:** Framer Motion
 - **Forms:** React Hook Form + Zod
 - **AI:** Anthropic Claude API
@@ -275,6 +275,22 @@ For complete specifications, see:
 - `/docs/DEV-PLAN.md` - Phase-by-phase build plan with code examples
 - `/prisma/schema.prisma` - Complete database schema
 
+## Pre-Commit Checks
+
+**REQUIRED:** Before committing any code changes, ALWAYS run:
+
+```bash
+npm run build
+```
+
+This catches:
+- TypeScript errors
+- ESLint errors
+- Import issues
+- Missing dependencies
+
+**Do NOT commit if the build fails. Fix all errors first.**
+
 ## Quick Commands
 
 ```bash
@@ -291,7 +307,7 @@ npx prisma studio
 npm test
 npm run test:e2e
 
-# Build
+# Build (ALWAYS run before committing)
 npm run build
 ```
 
