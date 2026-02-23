@@ -8,6 +8,7 @@ const updateBrandingSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   primaryColor: z.string().optional(),
   accentColor: z.string().optional(),
+  accentTextLight: z.boolean().optional(),
   darkMode: z.boolean().optional(),
   logoUrl: z.string().url().nullable().optional(),
   logoIconUrl: z.string().url().nullable().optional(),
@@ -35,6 +36,7 @@ export async function GET() {
         faviconUrl: true,
         primaryColor: true,
         accentColor: true,
+        accentTextLight: true,
         darkMode: true,
         customDomain: true,
         domainVerified: true,
@@ -91,6 +93,10 @@ export async function PATCH(request: NextRequest) {
       updateData.accentColor = normalizeHex(data.accentColor);
     }
 
+    if (data.accentTextLight !== undefined) {
+      updateData.accentTextLight = data.accentTextLight;
+    }
+
     if (data.darkMode !== undefined) {
       updateData.darkMode = data.darkMode;
     }
@@ -119,6 +125,7 @@ export async function PATCH(request: NextRequest) {
         faviconUrl: true,
         primaryColor: true,
         accentColor: true,
+        accentTextLight: true,
         darkMode: true,
       },
     });

@@ -22,6 +22,7 @@ export interface OrganizationBranding {
   faviconUrl: string | null;
   primaryColor: string;
   accentColor: string;
+  accentTextLight: boolean;
   darkMode: boolean;
 }
 

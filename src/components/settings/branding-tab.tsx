@@ -224,22 +224,28 @@ function ColorPicker({ label, description, value, onChange }: ColorPickerProps) 
 interface ColorPreviewProps {
   primaryColor: string
   accentColor: string
+  accentTextLight: boolean
 }
 
-function ColorPreview({ primaryColor, accentColor }: ColorPreviewProps) {
+function ColorPreview({ primaryColor, accentColor, accentTextLight }: ColorPreviewProps) {
   const isValidPrimary = isValidHex(primaryColor)
   const isValidAccent = isValidHex(accentColor)
+
+  // Determine text colors
+  const primaryTextColor = isValidPrimary && isLightColor(primaryColor) ? '#000' : '#fff'
+  const accentTextColor = accentTextLight ? '#fff' : '#000'
 
   return (
     <div className="space-y-3">
       <Label className="font-medium">Live Preview</Label>
       <div className="rounded-lg border bg-muted/30 p-4 space-y-4">
+        {/* Primary buttons */}
         <div className="flex flex-wrap gap-3">
           <button
             className="rounded-md px-4 py-2 text-sm font-medium transition-colors"
             style={{
               backgroundColor: isValidPrimary ? primaryColor : '#6366f1',
-              color: isValidPrimary && isLightColor(primaryColor) ? '#000' : '#fff',
+              color: primaryTextColor,
             }}
           >
             Primary Button
@@ -251,9 +257,31 @@ function ColorPreview({ primaryColor, accentColor }: ColorPreviewProps) {
               color: isValidPrimary ? primaryColor : '#6366f1',
             }}
           >
-            Outline Button
+            Primary Outline
           </button>
         </div>
+        {/* Accent buttons */}
+        <div className="flex flex-wrap gap-3">
+          <button
+            className="rounded-md px-4 py-2 text-sm font-medium transition-colors"
+            style={{
+              backgroundColor: isValidAccent ? accentColor : '#f59e0b',
+              color: accentTextColor,
+            }}
+          >
+            Accent Button
+          </button>
+          <button
+            className="rounded-md border px-4 py-2 text-sm font-medium transition-colors"
+            style={{
+              borderColor: isValidAccent ? accentColor : '#f59e0b',
+              color: isValidAccent ? accentColor : '#f59e0b',
+            }}
+          >
+            Accent Outline
+          </button>
+        </div>
+        {/* Badges */}
         <div className="flex flex-wrap gap-2">
           <span
             className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
@@ -274,14 +302,22 @@ function ColorPreview({ primaryColor, accentColor }: ColorPreviewProps) {
             Accent Badge
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <div
-            className="h-2 w-24 rounded-full"
-            style={{
-              backgroundColor: isValidPrimary ? primaryColor : '#6366f1',
-            }}
-          />
-          <span className="text-xs text-muted-foreground">Progress Bar</span>
+        {/* Progress bars */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div
+              className="h-2 w-20 rounded-full"
+              style={{ backgroundColor: isValidPrimary ? primaryColor : '#6366f1' }}
+            />
+            <span className="text-xs text-muted-foreground">Primary</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div
+              className="h-2 w-20 rounded-full"
+              style={{ backgroundColor: isValidAccent ? accentColor : '#f59e0b' }}
+            />
+            <span className="text-xs text-muted-foreground">Accent</span>
+          </div>
         </div>
       </div>
     </div>
@@ -296,6 +332,7 @@ export function BrandingTab() {
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [primaryColor, setPrimaryColor] = useState('#6366f1')
   const [accentColor, setAccentColor] = useState('#f59e0b')
+  const [accentTextLight, setAccentTextLight] = useState(true)
   const [darkMode, setDarkMode] = useState(false)
 
   // Loading states
@@ -308,6 +345,7 @@ export function BrandingTab() {
       setLogoUrl(organization.logoUrl)
       setPrimaryColor(organization.primaryColor || '#6366f1')
       setAccentColor(organization.accentColor || '#f59e0b')
+      setAccentTextLight(organization.accentTextLight ?? true)
       setDarkMode(organization.darkMode || false)
     }
   }, [organization])
@@ -429,6 +467,7 @@ export function BrandingTab() {
         body: JSON.stringify({
           primaryColor,
           accentColor,
+          accentTextLight,
           darkMode,
         }),
       })
@@ -518,7 +557,16 @@ export function BrandingTab() {
               onChange={setAccentColor}
             />
           </div>
-          <ColorPreview primaryColor={primaryColor} accentColor={accentColor} />
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <Label className="font-medium">Light Text on Accent</Label>
+              <p className="text-sm text-muted-foreground">
+                Use white text on accent color buttons instead of dark text.
+              </p>
+            </div>
+            <Switch checked={accentTextLight} onCheckedChange={setAccentTextLight} />
+          </div>
+          <ColorPreview primaryColor={primaryColor} accentColor={accentColor} accentTextLight={accentTextLight} />
         </CardContent>
       </Card>
 
