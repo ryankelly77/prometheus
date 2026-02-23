@@ -4,8 +4,18 @@
 -- Apply these policies via Supabase SQL Editor to enable multi-tenancy.
 -- Policies ensure users can only access data within their organization scope.
 -- ============================================================================
--- NOTE: Uses Supabase's built-in auth.uid() function (returns UUID)
+
 -- ============================================================================
+-- HELPER FUNCTION: Get current user ID from JWT
+-- ============================================================================
+-- This avoids needing to access the auth schema directly
+CREATE OR REPLACE FUNCTION public.current_user_id()
+RETURNS TEXT AS $$
+  SELECT COALESCE(
+    current_setting('request.jwt.claims', true)::json->>'sub',
+    ''
+  );
+$$ LANGUAGE SQL STABLE;
 
 -- ============================================================================
 -- HELPER FUNCTIONS
@@ -19,7 +29,7 @@ RETURNS TEXT[] AS $$
     '{}'::TEXT[]
   )
   FROM public."UserOrganization"
-  WHERE user_id = auth.uid()::text
+  WHERE user_id = public.current_user_id()
     AND is_active = true;
 $$ LANGUAGE SQL STABLE SECURITY DEFINER;
 
@@ -28,9 +38,12 @@ $$ LANGUAGE SQL STABLE SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION public.get_accessible_location_ids()
 RETURNS TEXT[] AS $$
 DECLARE
+  current_uid TEXT;
   user_memberships RECORD;
   location_ids TEXT[] := '{}';
 BEGIN
+  current_uid := public.current_user_id();
+
   FOR user_memberships IN
     SELECT
       uo.role,
@@ -38,7 +51,7 @@ BEGIN
       uo.restaurant_group_ids,
       uo.location_ids
     FROM public."UserOrganization" uo
-    WHERE uo.user_id = auth.uid()::text
+    WHERE uo.user_id = current_uid
       AND uo.is_active = true
   LOOP
     -- SUPER_ADMIN and PARTNER_ADMIN get all locations in org
@@ -94,7 +107,7 @@ BEGIN
   SELECT MAX(array_position(role_hierarchy, uo.role::TEXT))
   INTO user_role_level
   FROM public."UserOrganization" uo
-  WHERE uo.user_id = auth.uid()::text
+  WHERE uo.user_id = public.current_user_id()
     AND uo.is_active = true;
 
   RETURN COALESCE(user_role_level >= min_role_level, false);
@@ -117,71 +130,17 @@ ALTER TABLE public."PasswordResetToken" ENABLE ROW LEVEL SECURITY;
 -- Phase 2 tables (enable only if they exist)
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'DaypartMetrics') THEN
-    ALTER TABLE public."DaypartMetrics" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'DailyMetrics') THEN
-    ALTER TABLE public."DailyMetrics" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'MonthlyMetrics') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'MonthlyMetrics') THEN
     ALTER TABLE public."MonthlyMetrics" ENABLE ROW LEVEL SECURITY;
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'CustomerLoyalty') THEN
-    ALTER TABLE public."CustomerLoyalty" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Review') THEN
-    ALTER TABLE public."Review" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ReviewMetrics') THEN
-    ALTER TABLE public."ReviewMetrics" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'WebsiteVisibility') THEN
-    ALTER TABLE public."WebsiteVisibility" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'PRMention') THEN
-    ALTER TABLE public."PRMention" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'HealthScoreConfig') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'HealthScoreConfig') THEN
     ALTER TABLE public."HealthScoreConfig" ENABLE ROW LEVEL SECURITY;
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'HealthScoreHistory') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'HealthScoreHistory') THEN
     ALTER TABLE public."HealthScoreHistory" ENABLE ROW LEVEL SECURITY;
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'WeatherData') THEN
-    ALTER TABLE public."WeatherData" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'LocalEvent') THEN
-    ALTER TABLE public."LocalEvent" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Holiday') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'Holiday') THEN
     ALTER TABLE public."Holiday" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Integration') THEN
-    ALTER TABLE public."Integration" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'IntegrationStatus') THEN
-    ALTER TABLE public."IntegrationStatus" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ApiLog') THEN
-    ALTER TABLE public."ApiLog" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SocialAccount') THEN
-    ALTER TABLE public."SocialAccount" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SocialMetrics') THEN
-    ALTER TABLE public."SocialMetrics" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SocialPost') THEN
-    ALTER TABLE public."SocialPost" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'AIPrompt') THEN
-    ALTER TABLE public."AIPrompt" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'AIInsight') THEN
-    ALTER TABLE public."AIInsight" ENABLE ROW LEVEL SECURITY;
-  END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'AIUsage') THEN
-    ALTER TABLE public."AIUsage" ENABLE ROW LEVEL SECURITY;
   END IF;
 END $$;
 
@@ -243,13 +202,13 @@ DROP POLICY IF EXISTS "Users can view their own profile" ON public."UserProfile"
 CREATE POLICY "Users can view their own profile"
   ON public."UserProfile"
   FOR SELECT
-  USING (id = auth.uid()::text);
+  USING (id = public.current_user_id());
 
 DROP POLICY IF EXISTS "Users can update their own profile" ON public."UserProfile";
 CREATE POLICY "Users can update their own profile"
   ON public."UserProfile"
   FOR UPDATE
-  USING (id = auth.uid()::text);
+  USING (id = public.current_user_id());
 
 -- Users can see other profiles in same org (for team views)
 DROP POLICY IF EXISTS "Users can view profiles in their org" ON public."UserProfile";
@@ -303,7 +262,7 @@ DROP POLICY IF EXISTS "Users can view their own reset tokens" ON public."Passwor
 CREATE POLICY "Users can view their own reset tokens"
   ON public."PasswordResetToken"
   FOR SELECT
-  USING (user_id = auth.uid()::text);
+  USING (user_id = public.current_user_id());
 
 
 -- ============================================================================
@@ -314,7 +273,7 @@ CREATE POLICY "Users can view their own reset tokens"
 DO $$
 BEGIN
   -- MonthlyMetrics
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'MonthlyMetrics') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'MonthlyMetrics') THEN
     DROP POLICY IF EXISTS "Users can view monthly metrics" ON public."MonthlyMetrics";
     CREATE POLICY "Users can view monthly metrics"
       ON public."MonthlyMetrics"
@@ -332,7 +291,7 @@ BEGIN
   END IF;
 
   -- HealthScoreConfig
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'HealthScoreConfig') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'HealthScoreConfig') THEN
     DROP POLICY IF EXISTS "Users can view health score config" ON public."HealthScoreConfig";
     CREATE POLICY "Users can view health score config"
       ON public."HealthScoreConfig"
@@ -349,13 +308,22 @@ BEGIN
       );
   END IF;
 
+  -- HealthScoreHistory
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'HealthScoreHistory') THEN
+    DROP POLICY IF EXISTS "Users can view health score history" ON public."HealthScoreHistory";
+    CREATE POLICY "Users can view health score history"
+      ON public."HealthScoreHistory"
+      FOR SELECT
+      USING (location_id = ANY(public.get_accessible_location_ids()));
+  END IF;
+
   -- Holiday is a shared lookup table - all authenticated users can read
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Holiday') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'Holiday') THEN
     DROP POLICY IF EXISTS "Authenticated users can view holidays" ON public."Holiday";
     CREATE POLICY "Authenticated users can view holidays"
       ON public."Holiday"
       FOR SELECT
-      USING (auth.uid() IS NOT NULL);
+      USING (public.current_user_id() <> '');
 
     DROP POLICY IF EXISTS "Admins can manage holidays" ON public."Holiday";
     CREATE POLICY "Admins can manage holidays"
@@ -388,6 +356,8 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;
 GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
 
 -- Grant execute on helper functions
+GRANT EXECUTE ON FUNCTION public.current_user_id() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.current_user_id() TO anon;
 GRANT EXECUTE ON FUNCTION public.get_user_organization_ids() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_accessible_location_ids() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.has_role(TEXT) TO authenticated;
