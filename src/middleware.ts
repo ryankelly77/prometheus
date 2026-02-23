@@ -52,24 +52,32 @@ export async function middleware(request: NextRequest) {
   let organizationId: string | null = null;
   let isCustomDomain = false;
 
+  // First, check for org_id cookie (set after user selects org)
+  const cookieOrgId = request.cookies.get("org_id")?.value;
+  if (cookieOrgId) {
+    organizationId = cookieOrgId;
+  }
+
   if (IS_DEVELOPMENT) {
-    // In development, use X-Organization-Slug header or cookie
-    organizationSlug =
-      request.headers.get("X-Organization-Slug") ||
-      request.cookies.get("org_slug")?.value ||
-      null;
-  } else {
-    // Production: Check subdomain or custom domain
+    // In development, also allow X-Organization-Slug header or org_slug cookie
+    if (!organizationId) {
+      organizationSlug =
+        request.headers.get("X-Organization-Slug") ||
+        request.cookies.get("org_slug")?.value ||
+        null;
+    }
+  } else if (!organizationId) {
+    // Production: Check subdomain or custom domain (only if no cookie)
     const hostParts = hostname.split(".");
 
-    if (hostname.endsWith(MAIN_DOMAIN)) {
-      // Subdomain: {slug}.prometheus.app
+    if (hostname.endsWith(MAIN_DOMAIN) && hostname !== MAIN_DOMAIN) {
+      // Subdomain: {slug}.prometheus.app (but not the main domain itself)
       const subdomain = hostParts[0];
       if (subdomain && subdomain !== "www" && subdomain !== "app") {
         organizationSlug = subdomain;
       }
-    } else {
-      // Custom domain: resolve via API
+    } else if (!hostname.endsWith(MAIN_DOMAIN) && !hostname.includes("vercel.app")) {
+      // Custom domain: resolve via API (skip vercel.app domains)
       isCustomDomain = true;
       const orgData = await resolveCustomDomain(hostname);
       if (orgData) {
