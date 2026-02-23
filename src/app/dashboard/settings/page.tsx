@@ -4,7 +4,8 @@ import { Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import {
   SettingsTabs,
-  AccountTab,
+  GeneralTab,
+  BrandingTab,
   LocationsTab,
   IntegrationsTab,
   TeamTab,
@@ -15,12 +16,14 @@ import type { SettingsTab } from '@/types/settings'
 
 function SettingsContent() {
   const searchParams = useSearchParams()
-  const tab = (searchParams.get('tab') as SettingsTab) || 'account'
+  const tab = (searchParams.get('tab') as SettingsTab) || 'general'
 
   const renderTabContent = () => {
     switch (tab) {
-      case 'account':
-        return <AccountTab />
+      case 'general':
+        return <GeneralTab />
+      case 'branding':
+        return <BrandingTab />
       case 'locations':
         return <LocationsTab />
       case 'integrations':
@@ -32,7 +35,7 @@ function SettingsContent() {
       case 'billing':
         return <BillingTab />
       default:
-        return <AccountTab />
+        return <GeneralTab />
     }
   }
 

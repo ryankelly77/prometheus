@@ -1,5 +1,6 @@
 export { SettingsTabs } from './settings-tabs'
-export { AccountTab } from './account-tab'
+export { AccountTab, AccountTab as GeneralTab } from './account-tab'
+export { BrandingTab } from './branding-tab'
 export { LocationsTab } from './locations-tab'
 export { LocationCard } from './location-card'
 export { LocationModal } from './location-modal'

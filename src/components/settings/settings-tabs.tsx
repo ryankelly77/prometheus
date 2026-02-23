@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   User,
+  Palette,
   MapPin,
   Plug,
   Users,
@@ -13,7 +14,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { SettingsTab } from '@/types/settings'
 
 const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
-  { id: 'account', label: 'Account', icon: User },
+  { id: 'general', label: 'General', icon: User },
+  { id: 'branding', label: 'Branding', icon: Palette },
   { id: 'locations', label: 'Locations', icon: MapPin },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'team', label: 'Team', icon: Users },

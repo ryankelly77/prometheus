@@ -97,4 +97,4 @@ export interface BillingInfo {
   }>
 }
 
-export type SettingsTab = 'account' | 'locations' | 'integrations' | 'team' | 'notifications' | 'billing'
+export type SettingsTab = 'general' | 'branding' | 'locations' | 'integrations' | 'team' | 'notifications' | 'billing'

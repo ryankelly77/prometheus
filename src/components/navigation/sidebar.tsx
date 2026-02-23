@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import {
@@ -27,6 +28,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip'
 import { LocationSwitcher } from './location-switcher'
 import { useLocation } from '@/hooks/use-location'
+import { useOrganization } from '@/contexts'
 
 // Icon mapping for dynamic icon rendering
 const iconMap: Record<string, LucideIcon> = {
@@ -93,6 +95,7 @@ export function Sidebar({ className }: SidebarProps) {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
   const { locations } = useLocation()
+  const { organization } = useOrganization()
 
   // Filter navigation based on whether this is a multi-location account
   const isMultiLocation = locations.length > 1
@@ -116,17 +119,47 @@ export function Sidebar({ className }: SidebarProps) {
         <div className="flex h-16 items-center justify-between border-b px-4">
           {!collapsed && (
             <Link href="/dashboard" className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <span className="text-sm font-bold text-primary-foreground">P</span>
-              </div>
-              <span className="font-semibold">Prometheus</span>
+              {organization?.logoUrl ? (
+                <Image
+                  src={organization.logoUrl}
+                  alt={organization.name}
+                  width={160}
+                  height={40}
+                  className="h-10 w-auto max-w-[160px] object-contain"
+                />
+              ) : organization ? (
+                <span
+                  className="text-lg font-semibold"
+                  style={{ color: 'hsl(var(--brand-primary, var(--primary)))' }}
+                >
+                  {organization.name}
+                </span>
+              ) : (
+                <>
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+                    <span className="text-sm font-bold text-primary-foreground">P</span>
+                  </div>
+                  <span className="font-semibold">Prometheus</span>
+                </>
+              )}
+            </Link>
+          )}
+          {collapsed && organization?.logoIconUrl && (
+            <Link href="/dashboard" className="mx-auto">
+              <Image
+                src={organization.logoIconUrl}
+                alt={organization.name}
+                width={32}
+                height={32}
+                className="h-8 w-8 object-contain"
+              />
             </Link>
           )}
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setCollapsed(!collapsed)}
-            className={cn('h-8 w-8', collapsed && 'mx-auto')}
+            className={cn('h-8 w-8', collapsed && !organization?.logoIconUrl && 'mx-auto')}
           >
             {collapsed ? (
               <ChevronRight className="h-4 w-4" />
@@ -170,7 +203,7 @@ export function Sidebar({ className }: SidebarProps) {
                   className={cn(
                     'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                     isActive
-                      ? 'bg-primary/10 text-primary'
+                      ? 'bg-[hsl(var(--brand-primary,var(--primary))/0.1)] text-[hsl(var(--brand-primary,var(--primary)))]'
                       : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                     collapsed && 'justify-center px-2'
                   )}
@@ -196,6 +229,23 @@ export function Sidebar({ className }: SidebarProps) {
           </nav>
         </ScrollArea>
 
+        {/* Powered by Prometheus */}
+        {!collapsed && (
+          <div className="border-t px-3 py-2">
+            <a
+              href="https://prometheus.restaurant"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <div className="flex h-4 w-4 items-center justify-center rounded bg-primary/10">
+                <span className="text-[10px] font-bold text-primary">P</span>
+              </div>
+              <span>Powered by Prometheus</span>
+            </a>
+          </div>
+        )}
+
         {/* Bottom Navigation */}
         <div className="border-t p-3">
           {bottomNavigation.map((item) => {
@@ -208,7 +258,7 @@ export function Sidebar({ className }: SidebarProps) {
                 className={cn(
                   'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-primary/10 text-primary'
+                    ? 'bg-[hsl(var(--brand-primary,var(--primary))/0.1)] text-[hsl(var(--brand-primary,var(--primary)))]'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground',
                   collapsed && 'justify-center px-2'
                 )}
