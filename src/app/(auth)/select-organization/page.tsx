@@ -48,7 +48,14 @@ export default function SelectOrganizationPage() {
         }
 
         const data = await response.json();
-        setOrganizations(data.user.organizations || []);
+        const orgs = data.user.organizations || [];
+        setOrganizations(orgs);
+
+        // Auto-select if only one organization
+        if (orgs.length === 1) {
+          document.cookie = `org_id=${orgs[0].id}; path=/; max-age=${60 * 60 * 24 * 30}`;
+          router.push("/dashboard");
+        }
       } catch (error) {
         console.error("Failed to fetch organizations:", error);
         router.push("/login");
@@ -103,18 +110,6 @@ export default function SelectOrganizationPage() {
             <LogOut className="mr-2 h-4 w-4" />
             Sign Out
           </Button>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // If only one org, redirect immediately
-  if (organizations.length === 1) {
-    handleSelect(organizations[0]);
-    return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </CardContent>
       </Card>
     );
