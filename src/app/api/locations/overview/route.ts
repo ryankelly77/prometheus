@@ -35,10 +35,16 @@ export async function GET() {
   if (auth instanceof NextResponse) return auth;
 
   try {
-    // Get current and prior month dates
+    // Get current and prior month dates (use UTC to match database)
     const now = new Date();
-    const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const priorMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const currentYear = now.getUTCFullYear();
+    const currentMonthNum = now.getUTCMonth();
+
+    // Create date ranges for querying (start of current month to end of current month)
+    const currentMonthStart = new Date(Date.UTC(currentYear, currentMonthNum, 1));
+    const currentMonthEnd = new Date(Date.UTC(currentYear, currentMonthNum + 1, 0, 23, 59, 59, 999));
+    const priorMonthStart = new Date(Date.UTC(currentYear, currentMonthNum - 1, 1));
+    const priorMonthEnd = new Date(Date.UTC(currentYear, currentMonthNum, 0, 23, 59, 59, 999));
 
     // Get all locations user can access with their restaurant groups
     const locations = await prisma.location.findMany({
@@ -62,7 +68,10 @@ export async function GET() {
         },
         healthScoreHistory: {
           where: {
-            month: currentMonth,
+            month: {
+              gte: currentMonthStart,
+              lte: currentMonthEnd,
+            },
           },
           orderBy: {
             month: "desc",
@@ -75,13 +84,13 @@ export async function GET() {
         monthlyMetrics: {
           where: {
             month: {
-              in: [currentMonth, priorMonth],
+              gte: priorMonthStart,
+              lte: currentMonthEnd,
             },
           },
           orderBy: {
             month: "desc",
           },
-          take: 2,
           select: {
             month: true,
             totalSales: true,
@@ -120,12 +129,14 @@ export async function GET() {
         }
       }
 
-      // Get current and prior month sales
+      // Get current and prior month sales (compare year/month to avoid timezone issues)
       const currentMetrics = loc.monthlyMetrics.find(
-        (m) => m.month.getTime() === currentMonth.getTime()
+        (m) => m.month.getUTCFullYear() === currentYear &&
+               m.month.getUTCMonth() === currentMonthNum
       );
       const priorMetrics = loc.monthlyMetrics.find(
-        (m) => m.month.getTime() === priorMonth.getTime()
+        (m) => m.month.getUTCFullYear() === (currentMonthNum === 0 ? currentYear - 1 : currentYear) &&
+               m.month.getUTCMonth() === (currentMonthNum === 0 ? 11 : currentMonthNum - 1)
       );
 
       // Convert Decimal to number
