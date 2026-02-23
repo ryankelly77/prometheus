@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,25 +18,35 @@ import { Loader2, Lock, AlertCircle, CheckCircle2, ArrowLeft } from "lucide-reac
 
 export default function ResetPasswordPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const token = searchParams.get("token");
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
-  const [isValidSession, setIsValidSession] = useState<boolean | null>(null);
+  const [isValidToken, setIsValidToken] = useState<boolean | null>(null);
 
+  // Verify token on mount
   useEffect(() => {
-    // Check if user has a valid recovery session
-    const checkSession = async () => {
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
+    async function verifyToken() {
+      if (!token) {
+        setIsValidToken(false);
+        return;
+      }
 
-      // User should have a session from clicking the reset link
-      setIsValidSession(!!session);
-    };
+      try {
+        const response = await fetch(`/api/auth/reset-password?token=${token}`);
+        const data = await response.json();
+        setIsValidToken(data.valid);
+      } catch {
+        setIsValidToken(false);
+      }
+    }
 
-    checkSession();
-  }, []);
+    verifyToken();
+  }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,21 +66,24 @@ export default function ResetPasswordPage() {
     setIsLoading(true);
 
     try {
-      const supabase = createClient();
-      const { error: updateError } = await supabase.auth.updateUser({
-        password,
+      const response = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, password }),
       });
 
-      if (updateError) {
-        setError(updateError.message);
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || "Failed to reset password");
         return;
       }
 
       setIsSuccess(true);
 
-      // Redirect to dashboard after 2 seconds
+      // Redirect to login after 2 seconds
       setTimeout(() => {
-        router.push("/dashboard");
+        router.push("/login");
       }, 2000);
     } catch {
       setError("An unexpected error occurred");
@@ -80,8 +92,8 @@ export default function ResetPasswordPage() {
     }
   };
 
-  // Loading state while checking session
-  if (isValidSession === null) {
+  // Loading state while checking token
+  if (isValidToken === null) {
     return (
       <Card>
         <CardContent className="flex items-center justify-center py-12">
@@ -91,8 +103,8 @@ export default function ResetPasswordPage() {
     );
   }
 
-  // Invalid or expired reset link
-  if (!isValidSession) {
+  // Invalid or expired token
+  if (!isValidToken) {
     return (
       <Card>
         <CardHeader className="text-center">
@@ -131,7 +143,7 @@ export default function ResetPasswordPage() {
           </div>
           <CardTitle className="text-2xl">Password updated</CardTitle>
           <CardDescription>
-            Your password has been successfully reset. Redirecting to dashboard...
+            Your password has been successfully reset. Redirecting to sign in...
           </CardDescription>
         </CardHeader>
         <CardContent className="flex justify-center">
@@ -145,9 +157,7 @@ export default function ResetPasswordPage() {
     <Card>
       <CardHeader className="text-center">
         <CardTitle className="text-2xl">Set new password</CardTitle>
-        <CardDescription>
-          Enter your new password below
-        </CardDescription>
+        <CardDescription>Enter your new password below</CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">

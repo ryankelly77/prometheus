@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,16 +27,16 @@ export default function ForgotPasswordPage() {
     setIsLoading(true);
 
     try {
-      const supabase = createClient();
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        email,
-        {
-          redirectTo: `${window.location.origin}/reset-password`,
-        }
-      );
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
 
-      if (resetError) {
-        setError(resetError.message);
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || "Failed to send reset email");
         return;
       }
 
@@ -58,14 +57,15 @@ export default function ForgotPasswordPage() {
           </div>
           <CardTitle className="text-2xl">Check your email</CardTitle>
           <CardDescription>
-            We&apos;ve sent a password reset link to{" "}
-            <span className="font-medium text-foreground">{email}</span>
+            If an account exists for{" "}
+            <span className="font-medium text-foreground">{email}</span>, we&apos;ve
+            sent a password reset link.
           </CardDescription>
         </CardHeader>
         <CardContent className="text-center text-sm text-muted-foreground">
           <p>
-            Click the link in the email to reset your password. If you don&apos;t
-            see it, check your spam folder.
+            The link will expire in 1 hour. If you don&apos;t see the email, check
+            your spam folder.
           </p>
         </CardContent>
         <CardFooter className="flex flex-col gap-4">

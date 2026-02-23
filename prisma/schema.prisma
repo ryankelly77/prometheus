@@ -179,7 +179,8 @@ model UserProfile {
   updatedAt DateTime @updatedAt
 
   // Phase 1 relations
-  userOrganizations UserOrganization[]
+  userOrganizations   UserOrganization[]
+  passwordResetTokens PasswordResetToken[]
 
   // Phase 2 relations
   prMentionsCreated     PRMention[]
@@ -188,6 +189,23 @@ model UserProfile {
   aiInsightsGenerated   AIInsight[]
 
   @@index([email])
+}
+
+// ============================================
+// PASSWORD RESET TOKEN
+// ============================================
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique @default(cuid())
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([userId])
 }
 
 // ============================================

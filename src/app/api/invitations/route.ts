@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
+import { sendInvitationEmail } from "@/lib/email";
 import { z } from "zod";
 import { addDays } from "date-fns";
 
@@ -163,8 +164,28 @@ export async function POST(request: NextRequest) {
           },
         });
 
-    // TODO: Send invitation email
-    // await sendInvitationEmail(invitation);
+    // Send invitation email via Mailgun
+    await sendInvitationEmail(
+      invitation.email,
+      invitation.token,
+      auth.user.fullName || auth.user.email,
+      auth.organization.name,
+      invitation.role,
+      {
+        name: auth.organization.name,
+        primaryColor: auth.organization.primaryColor,
+        logoUrl: auth.organization.logoUrl,
+      }
+    );
+
+    // Update emailSentAt
+    await prisma.invitation.update({
+      where: { id: invitation.id },
+      data: {
+        emailSentAt: new Date(),
+        emailSentCount: 1,
+      },
+    });
 
     return NextResponse.json(
       {

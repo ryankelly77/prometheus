@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireRole } from "@/lib/auth";
+import { sendInvitationEmail } from "@/lib/email";
 import { addDays } from "date-fns";
 
 interface RouteParams {
@@ -73,14 +74,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       },
     });
 
-    // TODO: Send invitation email
-    // await sendInvitationEmail({
-    //   email: invitation.email,
-    //   token: invitation.token,
-    //   organizationName: invitation.organization.name,
-    //   invitedByEmail: invitation.invitedByEmail,
-    //   role: invitation.role,
-    // });
+    // Send invitation email via Mailgun
+    await sendInvitationEmail(
+      invitation.email,
+      invitation.token,
+      invitation.invitedByEmail,
+      invitation.organization.name,
+      invitation.role,
+      {
+        name: invitation.organization.name,
+        primaryColor: auth.organization.primaryColor,
+        logoUrl: auth.organization.logoUrl,
+      }
+    );
 
     return NextResponse.json({
       success: true,
