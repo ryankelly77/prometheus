@@ -11,6 +11,8 @@ export async function GET() {
   try {
     const supabaseUser = await getUser();
 
+    console.log("[auth/me] Supabase user:", supabaseUser?.id, supabaseUser?.email);
+
     if (!supabaseUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -27,6 +29,7 @@ export async function GET() {
                 id: true,
                 name: true,
                 slug: true,
+                logoUrl: true,
               },
             },
           },
@@ -34,7 +37,11 @@ export async function GET() {
       },
     });
 
+    console.log("[auth/me] User profile found:", !!userProfile);
+    console.log("[auth/me] Organizations count:", userProfile?.userOrganizations?.length ?? 0);
+
     if (!userProfile) {
+      console.log("[auth/me] No profile for Supabase ID:", supabaseUser.id);
       return NextResponse.json(
         { error: "User profile not found" },
         { status: 404 }
@@ -82,6 +89,7 @@ export async function GET() {
           id: m.organization.id,
           name: m.organization.name,
           slug: m.organization.slug,
+          logoUrl: m.organization.logoUrl,
           role: m.role,
         })),
       },
