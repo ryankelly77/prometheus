@@ -130,9 +130,20 @@ export function OrganizationProvider({
     const accentHsl = hexToHsl(organization.accentColor);
 
     if (primaryHsl) {
+      // Set primary color used by shadcn/ui components
+      root.style.setProperty("--primary", primaryHsl);
+      root.style.setProperty("--ring", primaryHsl);
+      root.style.setProperty("--sidebar-primary", primaryHsl);
+      root.style.setProperty("--sidebar-ring", primaryHsl);
+      // Also set chart-1 which uses primary color
+      root.style.setProperty("--chart-1", primaryHsl);
+      // Keep brand-primary for any custom uses
       root.style.setProperty("--brand-primary", primaryHsl);
     }
     if (accentHsl) {
+      // Set accent color
+      root.style.setProperty("--accent", accentHsl);
+      root.style.setProperty("--sidebar-accent", accentHsl);
       root.style.setProperty("--brand-accent", accentHsl);
     }
 
@@ -148,7 +159,14 @@ export function OrganizationProvider({
 
     return () => {
       // Cleanup: remove custom properties
+      root.style.removeProperty("--primary");
+      root.style.removeProperty("--ring");
+      root.style.removeProperty("--sidebar-primary");
+      root.style.removeProperty("--sidebar-ring");
+      root.style.removeProperty("--chart-1");
       root.style.removeProperty("--brand-primary");
+      root.style.removeProperty("--accent");
+      root.style.removeProperty("--sidebar-accent");
       root.style.removeProperty("--brand-accent");
     };
   }, [organization]);
