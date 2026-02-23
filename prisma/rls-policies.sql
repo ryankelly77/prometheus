@@ -4,26 +4,22 @@
 -- Apply these policies via Supabase SQL Editor to enable multi-tenancy.
 -- Policies ensure users can only access data within their organization scope.
 -- ============================================================================
+-- NOTE: Uses Supabase's built-in auth.uid() function (returns UUID)
+-- ============================================================================
 
 -- ============================================================================
 -- HELPER FUNCTIONS
 -- ============================================================================
 
--- Get current user's ID from JWT
-CREATE OR REPLACE FUNCTION auth.user_id()
-RETURNS TEXT AS $$
-  SELECT COALESCE(
-    current_setting('request.jwt.claims', true)::json->>'sub',
-    (current_setting('request.jwt.claims', true)::json->>'user_metadata')::json->>'sub'
-  );
-$$ LANGUAGE SQL STABLE;
-
 -- Get organization IDs the current user belongs to
 CREATE OR REPLACE FUNCTION public.get_user_organization_ids()
 RETURNS TEXT[] AS $$
-  SELECT ARRAY_AGG(organization_id)
+  SELECT COALESCE(
+    ARRAY_AGG(organization_id),
+    '{}'::TEXT[]
+  )
   FROM public."UserOrganization"
-  WHERE user_id = auth.user_id()
+  WHERE user_id = auth.uid()::text
     AND is_active = true;
 $$ LANGUAGE SQL STABLE SECURITY DEFINER;
 
@@ -42,7 +38,7 @@ BEGIN
       uo.restaurant_group_ids,
       uo.location_ids
     FROM public."UserOrganization" uo
-    WHERE uo.user_id = auth.user_id()
+    WHERE uo.user_id = auth.uid()::text
       AND uo.is_active = true
   LOOP
     -- SUPER_ADMIN and PARTNER_ADMIN get all locations in org
@@ -98,7 +94,7 @@ BEGIN
   SELECT MAX(array_position(role_hierarchy, uo.role::TEXT))
   INTO user_role_level
   FROM public."UserOrganization" uo
-  WHERE uo.user_id = auth.user_id()
+  WHERE uo.user_id = auth.uid()::text
     AND uo.is_active = true;
 
   RETURN COALESCE(user_role_level >= min_role_level, false);
@@ -116,31 +112,78 @@ ALTER TABLE public."Location" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."UserProfile" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."UserOrganization" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."Invitation" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."SSOSession" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."PasswordResetToken" ENABLE ROW LEVEL SECURITY;
 
--- Phase 2 tables
-ALTER TABLE public."DaypartMetrics" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."DailyMetrics" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."MonthlyMetrics" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."CustomerLoyalty" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."Review" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."ReviewMetrics" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."WebsiteVisibility" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."PRMention" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."HealthScoreConfig" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."HealthScoreHistory" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."WeatherData" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."LocalEvent" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."Holiday" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."Integration" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."IntegrationStatus" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."ApiLog" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."SocialAccount" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."SocialMetrics" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."SocialPost" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."AIPrompt" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."AIInsight" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public."AIUsage" ENABLE ROW LEVEL SECURITY;
+-- Phase 2 tables (enable only if they exist)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'DaypartMetrics') THEN
+    ALTER TABLE public."DaypartMetrics" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'DailyMetrics') THEN
+    ALTER TABLE public."DailyMetrics" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'MonthlyMetrics') THEN
+    ALTER TABLE public."MonthlyMetrics" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'CustomerLoyalty') THEN
+    ALTER TABLE public."CustomerLoyalty" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Review') THEN
+    ALTER TABLE public."Review" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ReviewMetrics') THEN
+    ALTER TABLE public."ReviewMetrics" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'WebsiteVisibility') THEN
+    ALTER TABLE public."WebsiteVisibility" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'PRMention') THEN
+    ALTER TABLE public."PRMention" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'HealthScoreConfig') THEN
+    ALTER TABLE public."HealthScoreConfig" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'HealthScoreHistory') THEN
+    ALTER TABLE public."HealthScoreHistory" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'WeatherData') THEN
+    ALTER TABLE public."WeatherData" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'LocalEvent') THEN
+    ALTER TABLE public."LocalEvent" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Holiday') THEN
+    ALTER TABLE public."Holiday" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Integration') THEN
+    ALTER TABLE public."Integration" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'IntegrationStatus') THEN
+    ALTER TABLE public."IntegrationStatus" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ApiLog') THEN
+    ALTER TABLE public."ApiLog" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SocialAccount') THEN
+    ALTER TABLE public."SocialAccount" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SocialMetrics') THEN
+    ALTER TABLE public."SocialMetrics" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SocialPost') THEN
+    ALTER TABLE public."SocialPost" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'AIPrompt') THEN
+    ALTER TABLE public."AIPrompt" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'AIInsight') THEN
+    ALTER TABLE public."AIInsight" ENABLE ROW LEVEL SECURITY;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'AIUsage') THEN
+    ALTER TABLE public."AIUsage" ENABLE ROW LEVEL SECURITY;
+  END IF;
+END $$;
 
 
 -- ============================================================================
@@ -148,11 +191,13 @@ ALTER TABLE public."AIUsage" ENABLE ROW LEVEL SECURITY;
 -- ============================================================================
 
 -- Organization: Users can see orgs they belong to
+DROP POLICY IF EXISTS "Users can view their organizations" ON public."Organization";
 CREATE POLICY "Users can view their organizations"
   ON public."Organization"
   FOR SELECT
   USING (id = ANY(public.get_user_organization_ids()));
 
+DROP POLICY IF EXISTS "Partner admins can update their organization" ON public."Organization";
 CREATE POLICY "Partner admins can update their organization"
   ON public."Organization"
   FOR UPDATE
@@ -162,11 +207,13 @@ CREATE POLICY "Partner admins can update their organization"
   );
 
 -- RestaurantGroup: Scoped to user's organizations
+DROP POLICY IF EXISTS "Users can view restaurant groups in their org" ON public."RestaurantGroup";
 CREATE POLICY "Users can view restaurant groups in their org"
   ON public."RestaurantGroup"
   FOR SELECT
   USING (organization_id = ANY(public.get_user_organization_ids()));
 
+DROP POLICY IF EXISTS "Group admins can manage restaurant groups" ON public."RestaurantGroup";
 CREATE POLICY "Group admins can manage restaurant groups"
   ON public."RestaurantGroup"
   FOR ALL
@@ -176,11 +223,13 @@ CREATE POLICY "Group admins can manage restaurant groups"
   );
 
 -- Location: Scoped to accessible locations
+DROP POLICY IF EXISTS "Users can view accessible locations" ON public."Location";
 CREATE POLICY "Users can view accessible locations"
   ON public."Location"
   FOR SELECT
   USING (id = ANY(public.get_accessible_location_ids()));
 
+DROP POLICY IF EXISTS "Group admins can manage locations" ON public."Location";
 CREATE POLICY "Group admins can manage locations"
   ON public."Location"
   FOR ALL
@@ -190,17 +239,20 @@ CREATE POLICY "Group admins can manage locations"
   );
 
 -- UserProfile: Users can see their own profile
+DROP POLICY IF EXISTS "Users can view their own profile" ON public."UserProfile";
 CREATE POLICY "Users can view their own profile"
   ON public."UserProfile"
   FOR SELECT
-  USING (id = auth.user_id());
+  USING (id = auth.uid()::text);
 
+DROP POLICY IF EXISTS "Users can update their own profile" ON public."UserProfile";
 CREATE POLICY "Users can update their own profile"
   ON public."UserProfile"
   FOR UPDATE
-  USING (id = auth.user_id());
+  USING (id = auth.uid()::text);
 
 -- Users can see other profiles in same org (for team views)
+DROP POLICY IF EXISTS "Users can view profiles in their org" ON public."UserProfile";
 CREATE POLICY "Users can view profiles in their org"
   ON public."UserProfile"
   FOR SELECT
@@ -212,11 +264,13 @@ CREATE POLICY "Users can view profiles in their org"
   );
 
 -- UserOrganization: Users can see memberships in their org
+DROP POLICY IF EXISTS "Users can view org memberships" ON public."UserOrganization";
 CREATE POLICY "Users can view org memberships"
   ON public."UserOrganization"
   FOR SELECT
   USING (organization_id = ANY(public.get_user_organization_ids()));
 
+DROP POLICY IF EXISTS "Group admins can manage org memberships" ON public."UserOrganization";
 CREATE POLICY "Group admins can manage org memberships"
   ON public."UserOrganization"
   FOR ALL
@@ -226,6 +280,7 @@ CREATE POLICY "Group admins can manage org memberships"
   );
 
 -- Invitation: Scoped to org with role-based access
+DROP POLICY IF EXISTS "Users can view invitations in their org" ON public."Invitation";
 CREATE POLICY "Users can view invitations in their org"
   ON public."Invitation"
   FOR SELECT
@@ -234,6 +289,7 @@ CREATE POLICY "Users can view invitations in their org"
     AND public.has_role('GROUP_ADMIN')
   );
 
+DROP POLICY IF EXISTS "Group admins can manage invitations" ON public."Invitation";
 CREATE POLICY "Group admins can manage invitations"
   ON public."Invitation"
   FOR ALL
@@ -242,227 +298,72 @@ CREATE POLICY "Group admins can manage invitations"
     AND public.has_role('GROUP_ADMIN')
   );
 
--- SSOSession: Scoped to org
-CREATE POLICY "SSO sessions visible to org admins"
-  ON public."SSOSession"
+-- PasswordResetToken: Users can only see their own tokens
+DROP POLICY IF EXISTS "Users can view their own reset tokens" ON public."PasswordResetToken";
+CREATE POLICY "Users can view their own reset tokens"
+  ON public."PasswordResetToken"
   FOR SELECT
-  USING (
-    organization_id = ANY(public.get_user_organization_ids())
-    AND public.has_role('PARTNER_ADMIN')
-  );
+  USING (user_id = auth.uid()::text);
 
 
 -- ============================================================================
 -- PHASE 2 TABLE POLICIES (Location-scoped)
+-- Apply only if tables exist
 -- ============================================================================
 
--- Metrics tables: Scoped to accessible locations
-CREATE POLICY "Users can view daypart metrics"
-  ON public."DaypartMetrics"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
+DO $$
+BEGIN
+  -- MonthlyMetrics
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'MonthlyMetrics') THEN
+    DROP POLICY IF EXISTS "Users can view monthly metrics" ON public."MonthlyMetrics";
+    CREATE POLICY "Users can view monthly metrics"
+      ON public."MonthlyMetrics"
+      FOR SELECT
+      USING (location_id = ANY(public.get_accessible_location_ids()));
 
-CREATE POLICY "Users can view daily metrics"
-  ON public."DailyMetrics"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
+    DROP POLICY IF EXISTS "Admins can manage monthly metrics" ON public."MonthlyMetrics";
+    CREATE POLICY "Admins can manage monthly metrics"
+      ON public."MonthlyMetrics"
+      FOR ALL
+      USING (
+        location_id = ANY(public.get_accessible_location_ids())
+        AND public.has_role('GROUP_ADMIN')
+      );
+  END IF;
 
-CREATE POLICY "Users can view monthly metrics"
-  ON public."MonthlyMetrics"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
+  -- HealthScoreConfig
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'HealthScoreConfig') THEN
+    DROP POLICY IF EXISTS "Users can view health score config" ON public."HealthScoreConfig";
+    CREATE POLICY "Users can view health score config"
+      ON public."HealthScoreConfig"
+      FOR SELECT
+      USING (location_id = ANY(public.get_accessible_location_ids()));
 
-CREATE POLICY "Admins can manage metrics"
-  ON public."DaypartMetrics"
-  FOR ALL
-  USING (
-    location_id = ANY(public.get_accessible_location_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
+    DROP POLICY IF EXISTS "Admins can manage health score config" ON public."HealthScoreConfig";
+    CREATE POLICY "Admins can manage health score config"
+      ON public."HealthScoreConfig"
+      FOR ALL
+      USING (
+        location_id = ANY(public.get_accessible_location_ids())
+        AND public.has_role('GROUP_ADMIN')
+      );
+  END IF;
 
-CREATE POLICY "Admins can manage daily metrics"
-  ON public."DailyMetrics"
-  FOR ALL
-  USING (
-    location_id = ANY(public.get_accessible_location_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
+  -- Holiday is a shared lookup table - all authenticated users can read
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Holiday') THEN
+    DROP POLICY IF EXISTS "Authenticated users can view holidays" ON public."Holiday";
+    CREATE POLICY "Authenticated users can view holidays"
+      ON public."Holiday"
+      FOR SELECT
+      USING (auth.uid() IS NOT NULL);
 
-CREATE POLICY "Admins can manage monthly metrics"
-  ON public."MonthlyMetrics"
-  FOR ALL
-  USING (
-    location_id = ANY(public.get_accessible_location_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
-
--- Customer loyalty
-CREATE POLICY "Users can view customer loyalty"
-  ON public."CustomerLoyalty"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
--- Reviews
-CREATE POLICY "Users can view reviews"
-  ON public."Review"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
-CREATE POLICY "Users can view review metrics"
-  ON public."ReviewMetrics"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
--- Website visibility
-CREATE POLICY "Users can view website visibility"
-  ON public."WebsiteVisibility"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
--- PR Mentions
-CREATE POLICY "Users can view PR mentions"
-  ON public."PRMention"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
-CREATE POLICY "Admins can manage PR mentions"
-  ON public."PRMention"
-  FOR ALL
-  USING (
-    location_id = ANY(public.get_accessible_location_ids())
-    AND public.has_role('LOCATION_MANAGER')
-  );
-
--- Health Score
-CREATE POLICY "Users can view health score config"
-  ON public."HealthScoreConfig"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
-CREATE POLICY "Admins can manage health score config"
-  ON public."HealthScoreConfig"
-  FOR ALL
-  USING (
-    location_id = ANY(public.get_accessible_location_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
-
-CREATE POLICY "Users can view health score history"
-  ON public."HealthScoreHistory"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
--- Weather & Events
-CREATE POLICY "Users can view weather data"
-  ON public."WeatherData"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
-CREATE POLICY "Users can view local events"
-  ON public."LocalEvent"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
--- Holiday is a shared lookup table - all authenticated users can read
-CREATE POLICY "Authenticated users can view holidays"
-  ON public."Holiday"
-  FOR SELECT
-  USING (auth.user_id() IS NOT NULL);
-
-CREATE POLICY "Admins can manage holidays"
-  ON public."Holiday"
-  FOR ALL
-  USING (public.has_role('PARTNER_ADMIN'));
-
--- Integrations
-CREATE POLICY "Users can view integrations"
-  ON public."Integration"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
-CREATE POLICY "Admins can manage integrations"
-  ON public."Integration"
-  FOR ALL
-  USING (
-    location_id = ANY(public.get_accessible_location_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
-
--- Integration status (org-level)
-CREATE POLICY "Users can view integration status"
-  ON public."IntegrationStatus"
-  FOR SELECT
-  USING (organization_id = ANY(public.get_user_organization_ids()));
-
--- API logs (org-level, admin only)
-CREATE POLICY "Admins can view API logs"
-  ON public."ApiLog"
-  FOR SELECT
-  USING (
-    organization_id = ANY(public.get_user_organization_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
-
--- Social accounts
-CREATE POLICY "Users can view social accounts"
-  ON public."SocialAccount"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
-CREATE POLICY "Admins can manage social accounts"
-  ON public."SocialAccount"
-  FOR ALL
-  USING (
-    location_id = ANY(public.get_accessible_location_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
-
-CREATE POLICY "Users can view social metrics"
-  ON public."SocialMetrics"
-  FOR SELECT
-  USING (
-    social_account_id IN (
-      SELECT id FROM public."SocialAccount"
-      WHERE location_id = ANY(public.get_accessible_location_ids())
-    )
-  );
-
-CREATE POLICY "Users can view social posts"
-  ON public."SocialPost"
-  FOR SELECT
-  USING (
-    social_account_id IN (
-      SELECT id FROM public."SocialAccount"
-      WHERE location_id = ANY(public.get_accessible_location_ids())
-    )
-  );
-
--- AI Features
-CREATE POLICY "Users can view AI prompts in their org"
-  ON public."AIPrompt"
-  FOR SELECT
-  USING (organization_id = ANY(public.get_user_organization_ids()));
-
-CREATE POLICY "Admins can manage AI prompts"
-  ON public."AIPrompt"
-  FOR ALL
-  USING (
-    organization_id = ANY(public.get_user_organization_ids())
-    AND public.has_role('PARTNER_ADMIN')
-  );
-
-CREATE POLICY "Users can view AI insights"
-  ON public."AIInsight"
-  FOR SELECT
-  USING (location_id = ANY(public.get_accessible_location_ids()));
-
-CREATE POLICY "Users can view AI usage in their org"
-  ON public."AIUsage"
-  FOR SELECT
-  USING (
-    organization_id = ANY(public.get_user_organization_ids())
-    AND public.has_role('GROUP_ADMIN')
-  );
+    DROP POLICY IF EXISTS "Admins can manage holidays" ON public."Holiday";
+    CREATE POLICY "Admins can manage holidays"
+      ON public."Holiday"
+      FOR ALL
+      USING (public.has_role('PARTNER_ADMIN'));
+  END IF;
+END $$;
 
 
 -- ============================================================================
