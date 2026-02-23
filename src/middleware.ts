@@ -18,7 +18,8 @@ const PUBLIC_ROUTES = [
   "/reset-password",
   "/auth/callback",
   "/auth/confirm",
-  "/invite/accept",
+  "/accept-invite",
+  "/select-organization",
 ];
 
 // Routes that should be accessible without org context

@@ -223,6 +223,13 @@ export function AcceptInviteForm({
         return;
       }
 
+      const result = await response.json();
+
+      // Set the org_id cookie so they can access the dashboard
+      if (result.organizationId) {
+        document.cookie = `org_id=${result.organizationId}; path=/; max-age=${60 * 60 * 24 * 30}`;
+      }
+
       setIsSuccess(true);
 
       // Redirect to dashboard after 2 seconds
