@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Upload, AlertTriangle } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -87,21 +87,6 @@ export function AccountTab() {
           <CardDescription>Manage your organization and personal information.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Logo Upload */}
-          <div className="flex items-start gap-6">
-            <div className="flex h-20 w-20 items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/50">
-              <span className="text-2xl">🏢</span>
-            </div>
-            <div className="space-y-2">
-              <Label>Organization Logo</Label>
-              <Button variant="outline" size="sm" className="gap-2">
-                <Upload className="h-4 w-4" />
-                Upload
-              </Button>
-              <p className="text-xs text-muted-foreground">PNG or JPG, max 2MB</p>
-            </div>
-          </div>
-
           {/* Organization Name */}
           <div className="space-y-2">
             <Label htmlFor="orgName">Organization Name</Label>
