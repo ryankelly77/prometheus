@@ -18,7 +18,7 @@ interface SendEmailOptions {
 
 const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
 const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN;
-const EMAIL_FROM = process.env.EMAIL_FROM || "noreply@prometheus.app";
+const EMAIL_FROM = process.env.EMAIL_FROM || "Prometheus App <noreply@prometheus.app>";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
 /**
