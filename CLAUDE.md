@@ -312,6 +312,23 @@ This catches:
 
 **Do NOT commit if the build fails. Fix all errors first.**
 
+## Verification
+
+After making changes, verify they actually happened:
+
+```bash
+# For seed changes
+grep "pattern" prisma/seed.ts
+
+# For code changes
+grep "pattern" src/path/to/file.ts
+
+# For env changes
+grep "VAR_NAME" .env.local
+```
+
+**Don't assume changes were made — confirm them.**
+
 ## Quick Commands
 
 ```bash

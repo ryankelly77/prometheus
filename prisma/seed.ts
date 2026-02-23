@@ -1,15 +1,69 @@
-import "dotenv/config";
+import { config } from "dotenv";
+config({ path: ".env.local" });
 import { Pool } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma";
+import { createClient } from "@supabase/supabase-js";
 
 // Prisma 7 requires an adapter for direct database connections
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
+// Supabase admin client for creating auth users
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { autoRefreshToken: false, persistSession: false } }
+);
+
+// Default password for demo users (change in production!)
+const DEFAULT_PASSWORD = "Demo123!@#";
+
+interface UserSeedData {
+  email: string;
+  fullName: string;
+  role: "SUPER_ADMIN" | "PARTNER_ADMIN" | "GROUP_ADMIN" | "LOCATION_MANAGER" | "VIEWER";
+  restaurantGroupIds?: string[];
+  locationIds?: string[];
+}
+
+/**
+ * Create or get a Supabase auth user and return their UUID.
+ */
+async function getOrCreateAuthUser(email: string, fullName: string): Promise<string> {
+  // First, check if user already exists
+  const { data: existingUsers } = await supabase.auth.admin.listUsers();
+  const existingUser = existingUsers?.users?.find(u => u.email === email);
+
+  if (existingUser) {
+    console.log(`    (existing auth user: ${existingUser.id})`);
+    return existingUser.id;
+  }
+
+  // Create new user
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password: DEFAULT_PASSWORD,
+    email_confirm: true, // Auto-confirm email
+    user_metadata: { full_name: fullName },
+  });
+
+  if (error) {
+    throw new Error(`Failed to create auth user ${email}: ${error.message}`);
+  }
+
+  console.log(`    (created auth user: ${data.user.id})`);
+  return data.user.id;
+}
+
 async function main() {
   console.log("🌱 Seeding database...\n");
+
+  // Verify Supabase connection
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  }
 
   // ==========================================================================
   // 1. DEMO ORGANIZATION
@@ -146,56 +200,75 @@ async function main() {
   }
 
   // ==========================================================================
-  // 4. TEST USERS (profiles only - auth handled by Supabase)
+  // 4. TEST USERS (Supabase Auth + UserProfile)
   // ==========================================================================
-  console.log("\nCreating test user profiles...");
+  console.log("\nCreating test users (Supabase Auth + UserProfile)...");
 
-  const users = [
+  const users: UserSeedData[] = [
     {
-      id: "user-super-admin",
-      email: "admin@prometheus.app",
-      fullName: "Alex Admin",
-      role: "SUPER_ADMIN" as const,
+      email: "ryan@pearanalytics.com",
+      fullName: "Ryan Kelly",
+      role: "SUPER_ADMIN",
     },
     {
-      id: "user-partner-admin",
       email: "partner@demo.prometheus.app",
       fullName: "Pat Partner",
-      role: "PARTNER_ADMIN" as const,
+      role: "PARTNER_ADMIN",
     },
     {
-      id: "user-group-admin",
       email: "manager@demo.prometheus.app",
       fullName: "Morgan Manager",
-      role: "GROUP_ADMIN" as const,
+      role: "GROUP_ADMIN",
       restaurantGroupIds: [fineGroup.id],
     },
     {
-      id: "user-location-manager",
       email: "location@demo.prometheus.app",
       fullName: "Lou Location",
-      role: "LOCATION_MANAGER" as const,
+      role: "LOCATION_MANAGER",
       locationIds: ["loc-steakhouse-downtown"],
     },
     {
-      id: "user-viewer",
       email: "viewer@demo.prometheus.app",
       fullName: "Val Viewer",
-      role: "VIEWER" as const,
+      role: "VIEWER",
     },
   ];
 
   for (const user of users) {
+    // Create or get Supabase auth user (returns UUID)
+    const authUserId = await getOrCreateAuthUser(user.email, user.fullName);
+
+    // Check if a profile exists with a different ID (old cuid)
+    const existingProfile = await prisma.userProfile.findUnique({
+      where: { email: user.email },
+    });
+
+    if (existingProfile && existingProfile.id !== authUserId) {
+      // Delete old profile and its org memberships to allow recreation with correct UUID
+      await prisma.userOrganization.deleteMany({
+        where: { userId: existingProfile.id },
+      });
+      await prisma.userProfile.delete({
+        where: { id: existingProfile.id },
+      });
+      console.log(`    (migrated old profile ${existingProfile.id} → ${authUserId})`);
+    }
+
+    // Create UserProfile with matching UUID
     const profile = await prisma.userProfile.upsert({
-      where: { id: user.id },
-      update: {},
+      where: { id: authUserId },
+      update: {
+        email: user.email,
+        fullName: user.fullName,
+      },
       create: {
-        id: user.id,
+        id: authUserId,
         email: user.email,
         fullName: user.fullName,
       },
     });
 
+    // Create organization membership
     await prisma.userOrganization.upsert({
       where: {
         userId_organizationId: {
@@ -203,7 +276,11 @@ async function main() {
           organizationId: demoOrg.id,
         },
       },
-      update: {},
+      update: {
+        role: user.role,
+        restaurantGroupIds: user.restaurantGroupIds || [],
+        locationIds: user.locationIds || [],
+      },
       create: {
         userId: profile.id,
         organizationId: demoOrg.id,
@@ -380,6 +457,7 @@ async function main() {
   console.log(`  Health Score Configs: ${locations.length}`);
   console.log(`  Monthly Metrics: ${locations.slice(0, 2).length * months.length}`);
   console.log(`  Holidays: ${holidays.length}`);
+  console.log(`\n📝 Demo user password: ${DEFAULT_PASSWORD}`);
 }
 
 main()
@@ -389,4 +467,5 @@ main()
   })
   .finally(async () => {
     await prisma.$disconnect();
+    await pool.end();
   });
