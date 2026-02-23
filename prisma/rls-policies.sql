@@ -4,11 +4,12 @@
 -- Apply these policies via Supabase SQL Editor to enable multi-tenancy.
 -- Policies ensure users can only access data within their organization scope.
 -- ============================================================================
+-- NOTE: Column names use camelCase to match Prisma schema
+-- ============================================================================
 
 -- ============================================================================
 -- HELPER FUNCTION: Get current user ID from JWT
 -- ============================================================================
--- This avoids needing to access the auth schema directly
 CREATE OR REPLACE FUNCTION public.current_user_id()
 RETURNS TEXT AS $$
   SELECT COALESCE(
@@ -25,16 +26,15 @@ $$ LANGUAGE SQL STABLE;
 CREATE OR REPLACE FUNCTION public.get_user_organization_ids()
 RETURNS TEXT[] AS $$
   SELECT COALESCE(
-    ARRAY_AGG(organization_id),
+    ARRAY_AGG("organizationId"),
     '{}'::TEXT[]
   )
   FROM public."UserOrganization"
-  WHERE user_id = public.current_user_id()
-    AND is_active = true;
+  WHERE "userId" = public.current_user_id()
+    AND "isActive" = true;
 $$ LANGUAGE SQL STABLE SECURITY DEFINER;
 
 -- Get location IDs the current user can access
--- Respects role hierarchy and access scope rules
 CREATE OR REPLACE FUNCTION public.get_accessible_location_ids()
 RETURNS TEXT[] AS $$
 DECLARE
@@ -47,45 +47,45 @@ BEGIN
   FOR user_memberships IN
     SELECT
       uo.role,
-      uo.organization_id,
-      uo.restaurant_group_ids,
-      uo.location_ids
+      uo."organizationId",
+      uo."restaurantGroupIds",
+      uo."locationIds"
     FROM public."UserOrganization" uo
-    WHERE uo.user_id = current_uid
-      AND uo.is_active = true
+    WHERE uo."userId" = current_uid
+      AND uo."isActive" = true
   LOOP
     -- SUPER_ADMIN and PARTNER_ADMIN get all locations in org
     IF user_memberships.role IN ('SUPER_ADMIN', 'PARTNER_ADMIN') THEN
       location_ids := location_ids || ARRAY(
         SELECT l.id
         FROM public."Location" l
-        JOIN public."RestaurantGroup" rg ON l.restaurant_group_id = rg.id
-        WHERE rg.organization_id = user_memberships.organization_id
-          AND l.is_active = true
+        JOIN public."RestaurantGroup" rg ON l."restaurantGroupId" = rg.id
+        WHERE rg."organizationId" = user_memberships."organizationId"
+          AND l."isActive" = true
       );
     -- Empty arrays = all locations in org
-    ELSIF array_length(user_memberships.restaurant_group_ids, 1) IS NULL
-      AND array_length(user_memberships.location_ids, 1) IS NULL THEN
+    ELSIF array_length(user_memberships."restaurantGroupIds", 1) IS NULL
+      AND array_length(user_memberships."locationIds", 1) IS NULL THEN
       location_ids := location_ids || ARRAY(
         SELECT l.id
         FROM public."Location" l
-        JOIN public."RestaurantGroup" rg ON l.restaurant_group_id = rg.id
-        WHERE rg.organization_id = user_memberships.organization_id
-          AND l.is_active = true
+        JOIN public."RestaurantGroup" rg ON l."restaurantGroupId" = rg.id
+        WHERE rg."organizationId" = user_memberships."organizationId"
+          AND l."isActive" = true
       );
     ELSE
       -- Add locations from restaurant groups
-      IF array_length(user_memberships.restaurant_group_ids, 1) > 0 THEN
+      IF array_length(user_memberships."restaurantGroupIds", 1) > 0 THEN
         location_ids := location_ids || ARRAY(
           SELECT l.id
           FROM public."Location" l
-          WHERE l.restaurant_group_id = ANY(user_memberships.restaurant_group_ids)
-            AND l.is_active = true
+          WHERE l."restaurantGroupId" = ANY(user_memberships."restaurantGroupIds")
+            AND l."isActive" = true
         );
       END IF;
       -- Add individual locations
-      IF array_length(user_memberships.location_ids, 1) > 0 THEN
-        location_ids := location_ids || user_memberships.location_ids;
+      IF array_length(user_memberships."locationIds", 1) > 0 THEN
+        location_ids := location_ids || user_memberships."locationIds";
       END IF;
     END IF;
   END LOOP;
@@ -107,8 +107,8 @@ BEGIN
   SELECT MAX(array_position(role_hierarchy, uo.role::TEXT))
   INTO user_role_level
   FROM public."UserOrganization" uo
-  WHERE uo.user_id = public.current_user_id()
-    AND uo.is_active = true;
+  WHERE uo."userId" = public.current_user_id()
+    AND uo."isActive" = true;
 
   RETURN COALESCE(user_role_level >= min_role_level, false);
 END;
@@ -170,14 +170,14 @@ DROP POLICY IF EXISTS "Users can view restaurant groups in their org" ON public.
 CREATE POLICY "Users can view restaurant groups in their org"
   ON public."RestaurantGroup"
   FOR SELECT
-  USING (organization_id = ANY(public.get_user_organization_ids()));
+  USING ("organizationId" = ANY(public.get_user_organization_ids()));
 
 DROP POLICY IF EXISTS "Group admins can manage restaurant groups" ON public."RestaurantGroup";
 CREATE POLICY "Group admins can manage restaurant groups"
   ON public."RestaurantGroup"
   FOR ALL
   USING (
-    organization_id = ANY(public.get_user_organization_ids())
+    "organizationId" = ANY(public.get_user_organization_ids())
     AND public.has_role('GROUP_ADMIN')
   );
 
@@ -217,8 +217,8 @@ CREATE POLICY "Users can view profiles in their org"
   FOR SELECT
   USING (
     id IN (
-      SELECT user_id FROM public."UserOrganization"
-      WHERE organization_id = ANY(public.get_user_organization_ids())
+      SELECT "userId" FROM public."UserOrganization"
+      WHERE "organizationId" = ANY(public.get_user_organization_ids())
     )
   );
 
@@ -227,14 +227,14 @@ DROP POLICY IF EXISTS "Users can view org memberships" ON public."UserOrganizati
 CREATE POLICY "Users can view org memberships"
   ON public."UserOrganization"
   FOR SELECT
-  USING (organization_id = ANY(public.get_user_organization_ids()));
+  USING ("organizationId" = ANY(public.get_user_organization_ids()));
 
 DROP POLICY IF EXISTS "Group admins can manage org memberships" ON public."UserOrganization";
 CREATE POLICY "Group admins can manage org memberships"
   ON public."UserOrganization"
   FOR ALL
   USING (
-    organization_id = ANY(public.get_user_organization_ids())
+    "organizationId" = ANY(public.get_user_organization_ids())
     AND public.has_role('GROUP_ADMIN')
   );
 
@@ -244,7 +244,7 @@ CREATE POLICY "Users can view invitations in their org"
   ON public."Invitation"
   FOR SELECT
   USING (
-    organization_id = ANY(public.get_user_organization_ids())
+    "organizationId" = ANY(public.get_user_organization_ids())
     AND public.has_role('GROUP_ADMIN')
   );
 
@@ -253,7 +253,7 @@ CREATE POLICY "Group admins can manage invitations"
   ON public."Invitation"
   FOR ALL
   USING (
-    organization_id = ANY(public.get_user_organization_ids())
+    "organizationId" = ANY(public.get_user_organization_ids())
     AND public.has_role('GROUP_ADMIN')
   );
 
@@ -262,12 +262,11 @@ DROP POLICY IF EXISTS "Users can view their own reset tokens" ON public."Passwor
 CREATE POLICY "Users can view their own reset tokens"
   ON public."PasswordResetToken"
   FOR SELECT
-  USING (user_id = public.current_user_id());
+  USING ("userId" = public.current_user_id());
 
 
 -- ============================================================================
 -- PHASE 2 TABLE POLICIES (Location-scoped)
--- Apply only if tables exist
 -- ============================================================================
 
 DO $$
@@ -278,14 +277,14 @@ BEGIN
     CREATE POLICY "Users can view monthly metrics"
       ON public."MonthlyMetrics"
       FOR SELECT
-      USING (location_id = ANY(public.get_accessible_location_ids()));
+      USING ("locationId" = ANY(public.get_accessible_location_ids()));
 
     DROP POLICY IF EXISTS "Admins can manage monthly metrics" ON public."MonthlyMetrics";
     CREATE POLICY "Admins can manage monthly metrics"
       ON public."MonthlyMetrics"
       FOR ALL
       USING (
-        location_id = ANY(public.get_accessible_location_ids())
+        "locationId" = ANY(public.get_accessible_location_ids())
         AND public.has_role('GROUP_ADMIN')
       );
   END IF;
@@ -296,14 +295,14 @@ BEGIN
     CREATE POLICY "Users can view health score config"
       ON public."HealthScoreConfig"
       FOR SELECT
-      USING (location_id = ANY(public.get_accessible_location_ids()));
+      USING ("locationId" = ANY(public.get_accessible_location_ids()));
 
     DROP POLICY IF EXISTS "Admins can manage health score config" ON public."HealthScoreConfig";
     CREATE POLICY "Admins can manage health score config"
       ON public."HealthScoreConfig"
       FOR ALL
       USING (
-        location_id = ANY(public.get_accessible_location_ids())
+        "locationId" = ANY(public.get_accessible_location_ids())
         AND public.has_role('GROUP_ADMIN')
       );
   END IF;
@@ -314,10 +313,10 @@ BEGIN
     CREATE POLICY "Users can view health score history"
       ON public."HealthScoreHistory"
       FOR SELECT
-      USING (location_id = ANY(public.get_accessible_location_ids()));
+      USING ("locationId" = ANY(public.get_accessible_location_ids()));
   END IF;
 
-  -- Holiday is a shared lookup table - all authenticated users can read
+  -- Holiday is a shared lookup table
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'Holiday') THEN
     DROP POLICY IF EXISTS "Authenticated users can view holidays" ON public."Holiday";
     CREATE POLICY "Authenticated users can view holidays"
@@ -335,27 +334,13 @@ END $$;
 
 
 -- ============================================================================
--- SERVICE ROLE BYPASS
--- ============================================================================
--- The service role (used by server-side code) bypasses RLS by default.
--- This is handled automatically by Supabase when using the service role key.
-
-
--- ============================================================================
 -- GRANT PERMISSIONS
 -- ============================================================================
 
--- Grant usage on schema
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT USAGE ON SCHEMA public TO anon;
-
--- Grant select on all tables to authenticated users (RLS will filter)
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;
-
--- Grant insert/update/delete to authenticated (RLS will control access)
 GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
-
--- Grant execute on helper functions
 GRANT EXECUTE ON FUNCTION public.current_user_id() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.current_user_id() TO anon;
 GRANT EXECUTE ON FUNCTION public.get_user_organization_ids() TO authenticated;
