@@ -48,6 +48,27 @@ src/
 └── types/                # TypeScript types
 ```
 
+## Local Environment Setup
+
+**Required before running `npm run dev`:**
+
+1. Copy `.env.example` to `.env.local`
+2. Fill in values from Supabase Dashboard and Vercel:
+
+| Variable | Source |
+|----------|--------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API |
+| `DATABASE_URL` | Supabase → Settings → Database → Connection string (Transaction/6543) |
+| `DIRECT_URL` | Supabase → Settings → Database → Connection string (Session/5432) |
+| `INTERNAL_API_SECRET` | Generate: `openssl rand -base64 32` |
+| `ENCRYPTION_KEY` | Generate: `openssl rand -base64 32` |
+| `MAILGUN_API_KEY` | Mailgun Dashboard |
+| `MAILGUN_DOMAIN` | Mailgun Dashboard |
+
+**Note:** Vercel env vars don't apply locally. You must configure `.env.local` separately.
+
 ## Design System
 
 ### Colors (CSS Variables)
