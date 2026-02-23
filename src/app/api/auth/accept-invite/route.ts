@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { z } from "zod";
 
 const acceptInviteSchema = z.object({
   token: z.string(),
   fullName: z.string().min(2),
-  userId: z.string().optional(),
+  password: z.string().min(8),
 });
 
 /**
@@ -15,7 +16,7 @@ const acceptInviteSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { token, fullName, userId } = acceptInviteSchema.parse(body);
+    const { token, fullName, password } = acceptInviteSchema.parse(body);
 
     // Find the invitation
     const invitation = await prisma.invitation.findUnique({
@@ -52,34 +53,72 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get or create user profile
-    // First check if user already exists (by email)
+    // Create Supabase auth user via admin API (auto-confirmed)
+    const supabaseAdmin = createAdminClient();
+
+    // Check if user already exists in Supabase Auth
+    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
+    const existingAuthUser = existingUsers?.users?.find(
+      (u) => u.email === invitation.email
+    );
+
+    let authUserId: string;
+
+    if (existingAuthUser) {
+      // User exists - update their password
+      const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
+        existingAuthUser.id,
+        { password }
+      );
+      if (updateError) {
+        console.error("Error updating user password:", updateError);
+        return NextResponse.json(
+          { error: "Failed to update user. Please try signing in with your existing password." },
+          { status: 400 }
+        );
+      }
+      authUserId = existingAuthUser.id;
+    } else {
+      // Create new user (auto-confirmed via admin API)
+      const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
+        email: invitation.email,
+        password,
+        email_confirm: true, // Auto-confirm email
+        user_metadata: {
+          full_name: fullName,
+        },
+      });
+
+      if (createError || !newUser.user) {
+        console.error("Error creating user:", createError);
+        return NextResponse.json(
+          { error: createError?.message || "Failed to create user account" },
+          { status: 500 }
+        );
+      }
+      authUserId = newUser.user.id;
+    }
+
+    // Get or create user profile in our database
     let userProfile = await prisma.userProfile.findUnique({
       where: { email: invitation.email },
     });
 
-    if (!userProfile && userId) {
+    if (!userProfile) {
       // Create new user profile
       userProfile = await prisma.userProfile.create({
         data: {
-          id: userId, // Use Supabase auth user ID
+          id: authUserId,
           email: invitation.email,
           fullName,
         },
       });
-    } else if (userProfile && fullName && !userProfile.fullName) {
+    } else if (fullName && !userProfile.fullName) {
       // Update existing profile with name if missing
       userProfile = await prisma.userProfile.update({
         where: { id: userProfile.id },
         data: { fullName },
       });
-    }
-
-    if (!userProfile) {
-      return NextResponse.json(
-        { error: "User profile could not be created. Please try again." },
-        { status: 500 }
-      );
     }
 
     // Check if user already has membership in this org

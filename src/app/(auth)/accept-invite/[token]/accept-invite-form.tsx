@@ -176,44 +176,14 @@ export function AcceptInviteForm({
     setIsLoading(true);
 
     try {
-      // 1. Create Supabase user
-      const supabase = createClient();
-      const { data: authData, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName,
-          },
-        },
-      });
-
-      if (signUpError) {
-        if (signUpError.message.includes("already registered")) {
-          // User exists - try to sign in and accept invite
-          const { error: signInError } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-          });
-
-          if (signInError) {
-            setError("This email is already registered. Please sign in with your existing password.");
-            return;
-          }
-        } else {
-          setError(signUpError.message);
-          return;
-        }
-      }
-
-      // 2. Accept the invitation via API
+      // 1. Accept the invitation via API (creates user account)
       const response = await fetch("/api/auth/accept-invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           token,
           fullName,
-          userId: authData?.user?.id,
+          password,
         }),
       });
 
@@ -228,6 +198,22 @@ export function AcceptInviteForm({
       // Set the org_id cookie so they can access the dashboard
       if (result.organizationId) {
         document.cookie = `org_id=${result.organizationId}; path=/; max-age=${60 * 60 * 24 * 30}`;
+      }
+
+      // 2. Sign in with the new credentials
+      const supabase = createClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        // Account created but sign-in failed - redirect to login
+        setError("Account created. Please sign in with your new password.");
+        setTimeout(() => {
+          router.push("/login");
+        }, 2000);
+        return;
       }
 
       setIsSuccess(true);
