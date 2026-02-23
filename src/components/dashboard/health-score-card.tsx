@@ -13,10 +13,10 @@ interface HealthScoreCardProps {
 }
 
 function getHealthColor(score: number): string {
-  if (score >= 100) return '#16A249'
-  if (score >= 90) return '#82CB15'
-  if (score >= 80) return 'hsl(var(--health-warning))'
-  return 'hsl(var(--health-danger))'
+  if (score >= 100) return 'hsl(142, 76%, 36%)' // --health-excellent (green)
+  if (score >= 90) return 'hsl(84, 81%, 44%)'   // --health-good (lime)
+  if (score >= 80) return 'hsl(48, 96%, 53%)'   // --health-warning (yellow)
+  return 'hsl(0, 84%, 60%)'                      // --health-danger (red)
 }
 
 function getHealthLabel(score: number): string {

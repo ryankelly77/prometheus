@@ -34,12 +34,13 @@ export async function GET(
       );
     }
 
-    // Get current month
+    // Get current month (use UTC to match database)
     const now = new Date();
-    const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const currentYear = now.getUTCFullYear();
+    const currentMonthNum = now.getUTCMonth();
 
     // Fetch health score history (last 12 months)
-    const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const twelveMonthsAgo = new Date(Date.UTC(currentYear, currentMonthNum - 11, 1));
 
     const healthHistory = await prisma.healthScoreHistory.findMany({
       where: {
@@ -58,9 +59,10 @@ export async function GET(
       where: { locationId },
     });
 
-    // Current health score
+    // Current health score (compare year/month to avoid timezone issues)
     const currentScore = healthHistory.find(
-      (h) => h.month.getTime() === currentMonth.getTime()
+      (h) => h.month.getUTCFullYear() === currentYear &&
+             h.month.getUTCMonth() === currentMonthNum
     );
 
     // Determine status
