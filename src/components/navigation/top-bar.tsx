@@ -1,5 +1,6 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { Bell, Menu, Moon, Sun, LogOut, Settings, User, MapPin } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
@@ -22,8 +23,18 @@ interface TopBarProps {
 }
 
 export function TopBar({ className }: TopBarProps) {
+  const router = useRouter()
   const { theme, setTheme } = useTheme()
   const { currentLocation, isAllLocations } = useLocation()
+
+  const handleSignOut = async () => {
+    try {
+      await fetch('/api/auth/signout', { method: 'POST' })
+      router.push('/login')
+    } catch (error) {
+      console.error('Error signing out:', error)
+    }
+  }
 
   // Get user initials for avatar fallback
   const getInitials = (name: string) => {
@@ -110,16 +121,19 @@ export function TopBar({ className }: TopBarProps) {
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push('/settings?tab=general')}>
               <User className="mr-2 h-4 w-4" />
               Profile
             </DropdownMenuItem>
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push('/settings')}>
               <Settings className="mr-2 h-4 w-4" />
               Settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive focus:text-destructive">
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={handleSignOut}
+            >
               <LogOut className="mr-2 h-4 w-4" />
               Log out
             </DropdownMenuItem>
