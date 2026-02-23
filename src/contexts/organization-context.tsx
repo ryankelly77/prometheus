@@ -21,6 +21,7 @@ export interface OrganizationBranding {
   logoIconUrl: string | null;
   faviconUrl: string | null;
   primaryColor: string;
+  primaryTextLight: boolean;
   accentColor: string;
   accentTextLight: boolean;
   darkMode: boolean;
@@ -140,12 +141,20 @@ export function OrganizationProvider({
       root.style.setProperty("--chart-1", primaryHsl);
       // Keep brand-primary for any custom uses
       root.style.setProperty("--brand-primary", primaryHsl);
+      // Set foreground color based on light/dark text preference
+      const primaryFg = organization.primaryTextLight ? "0 0% 100%" : "0 0% 0%";
+      root.style.setProperty("--primary-foreground", primaryFg);
+      root.style.setProperty("--sidebar-primary-foreground", primaryFg);
     }
     if (accentHsl) {
       // Set accent color
       root.style.setProperty("--accent", accentHsl);
       root.style.setProperty("--sidebar-accent", accentHsl);
       root.style.setProperty("--brand-accent", accentHsl);
+      // Set accent foreground based on light/dark text preference
+      const accentFg = organization.accentTextLight ? "0 0% 100%" : "0 0% 0%";
+      root.style.setProperty("--accent-foreground", accentFg);
+      root.style.setProperty("--sidebar-accent-foreground", accentFg);
     }
 
     // Update favicon if provided
@@ -161,13 +170,17 @@ export function OrganizationProvider({
     return () => {
       // Cleanup: remove custom properties
       root.style.removeProperty("--primary");
+      root.style.removeProperty("--primary-foreground");
       root.style.removeProperty("--ring");
       root.style.removeProperty("--sidebar-primary");
+      root.style.removeProperty("--sidebar-primary-foreground");
       root.style.removeProperty("--sidebar-ring");
       root.style.removeProperty("--chart-1");
       root.style.removeProperty("--brand-primary");
       root.style.removeProperty("--accent");
+      root.style.removeProperty("--accent-foreground");
       root.style.removeProperty("--sidebar-accent");
+      root.style.removeProperty("--sidebar-accent-foreground");
       root.style.removeProperty("--brand-accent");
     };
   }, [organization]);

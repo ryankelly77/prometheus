@@ -223,16 +223,17 @@ function ColorPicker({ label, description, value, onChange }: ColorPickerProps) 
 
 interface ColorPreviewProps {
   primaryColor: string
+  primaryTextLight: boolean
   accentColor: string
   accentTextLight: boolean
 }
 
-function ColorPreview({ primaryColor, accentColor, accentTextLight }: ColorPreviewProps) {
+function ColorPreview({ primaryColor, primaryTextLight, accentColor, accentTextLight }: ColorPreviewProps) {
   const isValidPrimary = isValidHex(primaryColor)
   const isValidAccent = isValidHex(accentColor)
 
-  // Determine text colors
-  const primaryTextColor = isValidPrimary && isLightColor(primaryColor) ? '#000' : '#fff'
+  // Determine text colors based on user preference
+  const primaryTextColor = primaryTextLight ? '#fff' : '#000'
   const accentTextColor = accentTextLight ? '#fff' : '#000'
 
   return (
@@ -302,6 +303,28 @@ function ColorPreview({ primaryColor, accentColor, accentTextLight }: ColorPrevi
             Accent Badge
           </span>
         </div>
+        {/* Navigation Preview */}
+        <div className="space-y-2">
+          <span className="text-xs text-muted-foreground">Navigation Preview</span>
+          <div className="flex flex-col gap-1 rounded-lg bg-sidebar p-2 border">
+            <div
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium"
+              style={{
+                backgroundColor: isValidPrimary ? primaryColor : '#6366f1',
+                color: primaryTextColor,
+              }}
+            >
+              <div className="h-4 w-4 rounded bg-current opacity-60" />
+              <span>Active Page</span>
+            </div>
+            <div
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent"
+            >
+              <div className="h-4 w-4 rounded bg-current opacity-60" />
+              <span>Inactive Page</span>
+            </div>
+          </div>
+        </div>
         {/* Progress bars */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
@@ -331,6 +354,7 @@ export function BrandingTab() {
   // Local state for form values
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   const [primaryColor, setPrimaryColor] = useState('#6366f1')
+  const [primaryTextLight, setPrimaryTextLight] = useState(true)
   const [accentColor, setAccentColor] = useState('#f59e0b')
   const [accentTextLight, setAccentTextLight] = useState(true)
   const [darkMode, setDarkMode] = useState(false)
@@ -344,6 +368,7 @@ export function BrandingTab() {
     if (organization) {
       setLogoUrl(organization.logoUrl)
       setPrimaryColor(organization.primaryColor || '#6366f1')
+      setPrimaryTextLight(organization.primaryTextLight ?? true)
       setAccentColor(organization.accentColor || '#f59e0b')
       setAccentTextLight(organization.accentTextLight ?? true)
       setDarkMode(organization.darkMode || false)
@@ -466,6 +491,7 @@ export function BrandingTab() {
         },
         body: JSON.stringify({
           primaryColor,
+          primaryTextLight,
           accentColor,
           accentTextLight,
           darkMode,
@@ -544,29 +570,67 @@ export function BrandingTab() {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid gap-6 md:grid-cols-2">
-            <ColorPicker
-              label="Primary Color"
-              description="Used for buttons, links, and key UI elements."
-              value={primaryColor}
-              onChange={setPrimaryColor}
-            />
-            <ColorPicker
-              label="Accent Color"
-              description="Used for highlights, badges, and secondary elements."
-              value={accentColor}
-              onChange={setAccentColor}
-            />
-          </div>
-          <div className="flex items-center justify-between rounded-lg border p-4">
-            <div className="space-y-0.5">
-              <Label className="font-medium">Light Text on Accent</Label>
-              <p className="text-sm text-muted-foreground">
-                Use white text on accent color buttons instead of dark text.
-              </p>
+            <div className="space-y-4">
+              <ColorPicker
+                label="Primary Color"
+                description="Used for buttons, links, and key UI elements."
+                value={primaryColor}
+                onChange={setPrimaryColor}
+              />
+              <button
+                type="button"
+                onClick={() => setPrimaryTextLight(!primaryTextLight)}
+                className="flex items-center gap-3 text-left"
+              >
+                <div
+                  className={cn(
+                    'flex h-5 w-5 items-center justify-center rounded border-2 transition-colors',
+                    primaryTextLight
+                      ? 'border-primary bg-primary'
+                      : 'border-muted-foreground/50 bg-transparent'
+                  )}
+                >
+                  {primaryTextLight && (
+                    <Check className="h-3.5 w-3.5 text-primary-foreground" />
+                  )}
+                </div>
+                <span className="text-sm">Light text on primary</span>
+              </button>
             </div>
-            <Switch checked={accentTextLight} onCheckedChange={setAccentTextLight} />
+            <div className="space-y-4">
+              <ColorPicker
+                label="Accent Color"
+                description="Used for highlights, badges, and secondary elements."
+                value={accentColor}
+                onChange={setAccentColor}
+              />
+              <button
+                type="button"
+                onClick={() => setAccentTextLight(!accentTextLight)}
+                className="flex items-center gap-3 text-left"
+              >
+                <div
+                  className={cn(
+                    'flex h-5 w-5 items-center justify-center rounded border-2 transition-colors',
+                    accentTextLight
+                      ? 'border-primary bg-primary'
+                      : 'border-muted-foreground/50 bg-transparent'
+                  )}
+                >
+                  {accentTextLight && (
+                    <Check className="h-3.5 w-3.5 text-primary-foreground" />
+                  )}
+                </div>
+                <span className="text-sm">Light text on accent</span>
+              </button>
+            </div>
           </div>
-          <ColorPreview primaryColor={primaryColor} accentColor={accentColor} accentTextLight={accentTextLight} />
+          <ColorPreview
+            primaryColor={primaryColor}
+            primaryTextLight={primaryTextLight}
+            accentColor={accentColor}
+            accentTextLight={accentTextLight}
+          />
         </CardContent>
       </Card>
 

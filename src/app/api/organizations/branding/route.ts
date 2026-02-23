@@ -7,6 +7,7 @@ import { z } from "zod";
 const updateBrandingSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   primaryColor: z.string().optional(),
+  primaryTextLight: z.boolean().optional(),
   accentColor: z.string().optional(),
   accentTextLight: z.boolean().optional(),
   darkMode: z.boolean().optional(),
@@ -35,6 +36,7 @@ export async function GET() {
         logoIconUrl: true,
         faviconUrl: true,
         primaryColor: true,
+        primaryTextLight: true,
         accentColor: true,
         accentTextLight: true,
         darkMode: true,
@@ -83,6 +85,10 @@ export async function PATCH(request: NextRequest) {
       updateData.primaryColor = normalizeHex(data.primaryColor);
     }
 
+    if (data.primaryTextLight !== undefined) {
+      updateData.primaryTextLight = data.primaryTextLight;
+    }
+
     if (data.accentColor !== undefined) {
       if (!isValidHex(data.accentColor)) {
         return NextResponse.json(
@@ -124,6 +130,7 @@ export async function PATCH(request: NextRequest) {
         logoIconUrl: true,
         faviconUrl: true,
         primaryColor: true,
+        primaryTextLight: true,
         accentColor: true,
         accentTextLight: true,
         darkMode: true,

@@ -203,8 +203,8 @@ export function Sidebar({ className }: SidebarProps) {
                   className={cn(
                     'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                     isActive
-                      ? 'bg-[hsl(var(--brand-primary,var(--primary))/0.1)] text-[hsl(var(--brand-primary,var(--primary)))]'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
                     collapsed && 'justify-center px-2'
                   )}
                 >
@@ -258,8 +258,8 @@ export function Sidebar({ className }: SidebarProps) {
                 className={cn(
                   'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-[hsl(var(--brand-primary,var(--primary))/0.1)] text-[hsl(var(--brand-primary,var(--primary)))]'
-                    : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
                   collapsed && 'justify-center px-2'
                 )}
               >

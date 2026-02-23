@@ -15,6 +15,7 @@ model Organization {
   logoIconUrl       String?
   faviconUrl        String?
   primaryColor      String              @default("#6366f1")
+  primaryTextLight  Boolean             @default(true)
   accentColor       String              @default("#8b5cf6")
   accentTextLight   Boolean             @default(true)
   darkMode          Boolean             @default(true)
