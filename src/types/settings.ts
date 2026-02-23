@@ -56,10 +56,12 @@ export interface TeamMember {
   id: string
   name: string
   email: string
+  avatarUrl?: string | null
   role: 'owner' | 'admin' | 'manager' | 'viewer'
   locationAccess: 'all' | string[]
-  status: 'active' | 'pending'
+  status: 'active' | 'pending' | 'expired'
   invitedAt?: string
+  joinedAt?: string
 }
 
 export interface NotificationPreferences {

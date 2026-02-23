@@ -32,14 +32,14 @@ interface InviteModalProps {
     role: TeamMember['role']
     locationAccess: 'all' | string[]
   }) => void
+  isSaving?: boolean
 }
 
-export function InviteModal({ open, onOpenChange, member, onSave }: InviteModalProps) {
+export function InviteModal({ open, onOpenChange, member, onSave, isSaving = false }: InviteModalProps) {
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<TeamMember['role']>('manager')
   const [allLocations, setAllLocations] = useState(true)
   const [selectedLocations, setSelectedLocations] = useState<string[]>([])
-  const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
     if (member) {
@@ -68,16 +68,12 @@ export function InviteModal({ open, onOpenChange, member, onSave }: InviteModalP
     }
   }
 
-  const handleSave = async () => {
-    setIsSaving(true)
-    await new Promise((resolve) => setTimeout(resolve, 500))
+  const handleSave = () => {
     onSave({
       email,
       role,
       locationAccess: allLocations ? 'all' : selectedLocations,
     })
-    setIsSaving(false)
-    onOpenChange(false)
   }
 
   const isValid = email && role && (allLocations || selectedLocations.length > 0)
