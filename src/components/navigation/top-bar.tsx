@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { Bell, Menu, Moon, Sun, LogOut, Settings, User, MapPin } from 'lucide-react'
+import { Bell, Menu, Moon, Sun, LogOut, User, MapPin } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import {
@@ -124,10 +124,6 @@ export function TopBar({ className }: TopBarProps) {
             <DropdownMenuItem onClick={() => router.push('/dashboard/settings?tab=general')}>
               <User className="mr-2 h-4 w-4" />
               Profile
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => router.push('/dashboard/settings')}>
-              <Settings className="mr-2 h-4 w-4" />
-              Settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
