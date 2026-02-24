@@ -28,7 +28,8 @@ export async function requireOrganization(): Promise<AuthContext | NextResponse>
   }
 
   // Get user profile with organization memberships
-  const userProfile = await prisma.userProfile.findUnique({
+  // First try by ID (Supabase user ID), then fallback to email
+  let userProfile = await prisma.userProfile.findUnique({
     where: { id: supabaseUser.id },
     include: {
       userOrganizations: {
@@ -37,6 +38,71 @@ export async function requireOrganization(): Promise<AuthContext | NextResponse>
       },
     },
   });
+
+  // Fallback: look up by email if ID doesn't match
+  // This can happen if profile was created before Supabase auth user
+  if (!userProfile && supabaseUser.email) {
+    userProfile = await prisma.userProfile.findUnique({
+      where: { email: supabaseUser.email },
+      include: {
+        userOrganizations: {
+          where: { isActive: true },
+          include: { organization: true },
+        },
+      },
+    });
+
+    // If found by email, update the ID to match Supabase
+    if (userProfile && userProfile.id !== supabaseUser.id) {
+      // Update the user profile ID to match Supabase auth ID
+      // This requires deleting and recreating due to Prisma PK constraints
+      const memberships = userProfile.userOrganizations;
+
+      await prisma.$transaction(async (tx) => {
+        // Delete old memberships
+        await tx.userOrganization.deleteMany({
+          where: { userId: userProfile!.id },
+        });
+        // Delete old profile
+        await tx.userProfile.delete({
+          where: { id: userProfile!.id },
+        });
+        // Create new profile with correct ID
+        await tx.userProfile.create({
+          data: {
+            id: supabaseUser.id,
+            email: userProfile!.email,
+            fullName: userProfile!.fullName,
+            avatarUrl: userProfile!.avatarUrl,
+          },
+        });
+        // Recreate memberships with new user ID
+        for (const m of memberships) {
+          await tx.userOrganization.create({
+            data: {
+              userId: supabaseUser.id,
+              organizationId: m.organizationId,
+              role: m.role,
+              restaurantGroupIds: m.restaurantGroupIds,
+              locationIds: m.locationIds,
+              isActive: m.isActive,
+            },
+          });
+        }
+      });
+
+      // Re-fetch with correct ID
+      userProfile = await prisma.userProfile.findUnique({
+        where: { id: supabaseUser.id },
+        include: {
+          userOrganizations: {
+            where: { isActive: true },
+            include: { organization: true },
+          },
+        },
+      });
+    }
+  }
 
   if (!userProfile) {
     return NextResponse.json(
