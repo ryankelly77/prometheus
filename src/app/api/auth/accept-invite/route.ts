@@ -100,25 +100,89 @@ export async function POST(request: NextRequest) {
     }
 
     // Get or create user profile in our database
+    // First check if profile exists with matching auth ID
     let userProfile = await prisma.userProfile.findUnique({
-      where: { email: invitation.email },
+      where: { id: authUserId },
     });
 
     if (!userProfile) {
-      // Create new user profile
-      userProfile = await prisma.userProfile.create({
-        data: {
-          id: authUserId,
-          email: invitation.email,
-          fullName,
-        },
+      // Check if profile exists by email (legacy case)
+      const existingByEmail = await prisma.userProfile.findUnique({
+        where: { email: invitation.email },
       });
+
+      if (existingByEmail) {
+        // Profile exists but with different ID - migrate it
+        // Delete old profile and recreate with correct ID
+        await prisma.$transaction(async (tx) => {
+          // Get existing memberships
+          const memberships = await tx.userOrganization.findMany({
+            where: { userId: existingByEmail.id },
+          });
+
+          // Delete old memberships
+          await tx.userOrganization.deleteMany({
+            where: { userId: existingByEmail.id },
+          });
+
+          // Delete old profile
+          await tx.userProfile.delete({
+            where: { id: existingByEmail.id },
+          });
+
+          // Create new profile with correct ID
+          await tx.userProfile.create({
+            data: {
+              id: authUserId,
+              email: invitation.email,
+              fullName: fullName || existingByEmail.fullName,
+              avatarUrl: existingByEmail.avatarUrl,
+            },
+          });
+
+          // Recreate memberships with new user ID
+          for (const m of memberships) {
+            await tx.userOrganization.create({
+              data: {
+                userId: authUserId,
+                organizationId: m.organizationId,
+                role: m.role,
+                restaurantGroupIds: m.restaurantGroupIds,
+                locationIds: m.locationIds,
+                isActive: m.isActive,
+              },
+            });
+          }
+        });
+
+        userProfile = await prisma.userProfile.findUnique({
+          where: { id: authUserId },
+        });
+      } else {
+        // Create new user profile
+        userProfile = await prisma.userProfile.create({
+          data: {
+            id: authUserId,
+            email: invitation.email,
+            fullName,
+          },
+        });
+      }
     } else if (fullName && !userProfile.fullName) {
       // Update existing profile with name if missing
       userProfile = await prisma.userProfile.update({
         where: { id: userProfile.id },
         data: { fullName },
       });
+    }
+
+    // Ensure we have a valid user profile
+    if (!userProfile) {
+      console.error("Failed to create or find user profile for:", invitation.email);
+      return NextResponse.json(
+        { error: "Failed to create user profile" },
+        { status: 500 }
+      );
     }
 
     // Check if user already has membership in this org
