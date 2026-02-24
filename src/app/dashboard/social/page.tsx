@@ -1008,9 +1008,8 @@ export default function SocialMediaPage() {
   const [periodType, setPeriodType] = useState<'month' | 'quarter' | 'year'>('month')
   const [isConnected, setIsConnected] = useState(mockSocialConnection.isConnected)
 
-  const handleConnect = (providerId: string) => {
-    // In a real app, this would trigger OAuth flow
-    console.log('Connecting to:', providerId)
+  const handleConnect = (_providerId: string) => {
+    // TODO: Implement OAuth flow for social media connections
     setIsConnected(true)
   }
 

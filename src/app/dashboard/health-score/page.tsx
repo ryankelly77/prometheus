@@ -218,7 +218,7 @@ export default function HealthScoreConfigPage() {
   const handleSave = useCallback(() => {
     if (!canSave) return
 
-    console.log('Saving configuration:', { weights, toggles })
+    // TODO: Implement API call to save health score configuration
     toast.success('Configuration saved successfully')
     setIsDirty(false)
   }, [canSave, weights, toggles])

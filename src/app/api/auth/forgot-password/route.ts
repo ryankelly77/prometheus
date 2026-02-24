@@ -68,9 +68,7 @@ export async function POST(request: NextRequest) {
     const branding = user.userOrganizations[0]?.organization || null;
 
     // Send email
-    console.log("DEBUG: Sending email to", user.email);
-    const emailSent = await sendPasswordResetEmail(user.email, resetToken.token, branding);
-    console.log("Password reset email result:", { emailSent, to: user.email, token: resetToken.token });
+    await sendPasswordResetEmail(user.email, resetToken.token, branding);
 
     return NextResponse.json({
       success: true,
