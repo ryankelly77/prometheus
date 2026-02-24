@@ -75,6 +75,15 @@ async function cleanupExistingData() {
   await prisma.websiteVisibility.deleteMany({});
   await prisma.pRMention.deleteMany({});
   await prisma.integration.deleteMany({});
+  // Warehouse tables
+  await prisma.insightCache.deleteMany({});
+  await prisma.seatingArea.deleteMany({});
+  await prisma.categorySales.deleteMany({});
+  await prisma.transactionSummary.deleteMany({});
+  await prisma.laborDetail.deleteMany({});
+  await prisma.menuItemSales.deleteMany({});
+  await prisma.menuItem.deleteMany({});
+  await prisma.menuCategory.deleteMany({});
   await prisma.location.deleteMany({});
   await prisma.restaurantGroup.deleteMany({});
 
@@ -782,6 +791,305 @@ async function main() {
   }
   console.log(`  ✓ Holidays: ${holidays.length} entries`);
 
+  // ==========================================================================
+  // 11. SEATING AREAS (for future Simulator)
+  // ==========================================================================
+  console.log("\nCreating seating areas...");
+
+  const seatingAreasByLocation: Record<string, Array<{ name: string; seats: number; isOutdoor: boolean; weatherDependent: boolean }>> = {
+    "loc-southerleigh-brewery": [
+      { name: "Main Dining", seats: 80, isOutdoor: false, weatherDependent: false },
+      { name: "Bar", seats: 24, isOutdoor: false, weatherDependent: false },
+      { name: "Brewery Patio", seats: 60, isOutdoor: true, weatherDependent: true },
+      { name: "Private Event Space", seats: 40, isOutdoor: false, weatherDependent: false },
+    ],
+    "loc-mon-chou-chou": [
+      { name: "Main Dining", seats: 65, isOutdoor: false, weatherDependent: false },
+      { name: "Bar", seats: 18, isOutdoor: false, weatherDependent: false },
+      { name: "Patio", seats: 45, isOutdoor: true, weatherDependent: true },
+    ],
+    "loc-boilerhouse": [
+      { name: "Main Dining", seats: 70, isOutdoor: false, weatherDependent: false },
+      { name: "Wine Garden", seats: 50, isOutdoor: true, weatherDependent: true },
+      { name: "Bar", seats: 20, isOutdoor: false, weatherDependent: false },
+      { name: "Private Room", seats: 30, isOutdoor: false, weatherDependent: false },
+    ],
+    "loc-southerleigh-haute-south": [
+      { name: "Main Dining", seats: 90, isOutdoor: false, weatherDependent: false },
+      { name: "Bar", seats: 22, isOutdoor: false, weatherDependent: false },
+      { name: "Covered Patio", seats: 40, isOutdoor: true, weatherDependent: false },
+    ],
+  };
+
+  let seatingAreaCount = 0;
+  for (const loc of locations) {
+    const areas = seatingAreasByLocation[loc.id] || [];
+    for (const area of areas) {
+      await prisma.seatingArea.create({
+        data: {
+          locationId: loc.id,
+          name: area.name,
+          seats: area.seats,
+          isOutdoor: area.isOutdoor,
+          weatherDependent: area.weatherDependent,
+        },
+      });
+      seatingAreaCount++;
+    }
+  }
+  console.log(`  ✓ SeatingAreas: ${seatingAreaCount} entries`);
+
+  // ==========================================================================
+  // 12. MENU CATEGORIES & ITEMS (reference tables)
+  // ==========================================================================
+  console.log("\nCreating menu categories and items...");
+
+  const menuCategories = [
+    { name: "Appetizers", displayOrder: 1 },
+    { name: "Salads", displayOrder: 2 },
+    { name: "Entrees", displayOrder: 3 },
+    { name: "Steaks & Grills", displayOrder: 4 },
+    { name: "Sides", displayOrder: 5 },
+    { name: "Desserts", displayOrder: 6 },
+    { name: "Beer", displayOrder: 7 },
+    { name: "Wine", displayOrder: 8 },
+    { name: "Cocktails", displayOrder: 9 },
+    { name: "Non-Alcoholic", displayOrder: 10 },
+  ];
+
+  // Sample menu items per category
+  const menuItemsByCategory: Record<string, Array<{ name: string; price: number }>> = {
+    "Appetizers": [
+      { name: "Deviled Eggs", price: 12 },
+      { name: "Fried Pickles", price: 11 },
+      { name: "Pimento Cheese", price: 14 },
+      { name: "Gulf Oysters", price: 24 },
+    ],
+    "Salads": [
+      { name: "House Salad", price: 10 },
+      { name: "Caesar Salad", price: 14 },
+      { name: "Wedge Salad", price: 13 },
+    ],
+    "Entrees": [
+      { name: "Fried Chicken", price: 26 },
+      { name: "Grilled Salmon", price: 32 },
+      { name: "Pork Chop", price: 29 },
+      { name: "Shrimp & Grits", price: 28 },
+    ],
+    "Steaks & Grills": [
+      { name: "12oz Ribeye", price: 52 },
+      { name: "8oz Filet", price: 48 },
+      { name: "Texas Wagyu Burger", price: 22 },
+    ],
+    "Sides": [
+      { name: "Mac & Cheese", price: 9 },
+      { name: "Collard Greens", price: 8 },
+      { name: "Mashed Potatoes", price: 8 },
+    ],
+    "Desserts": [
+      { name: "Pecan Pie", price: 10 },
+      { name: "Chocolate Cake", price: 12 },
+      { name: "Ice Cream", price: 8 },
+    ],
+    "Beer": [
+      { name: "House Lager", price: 7 },
+      { name: "IPA", price: 8 },
+      { name: "Stout", price: 9 },
+    ],
+    "Wine": [
+      { name: "House Red (Glass)", price: 12 },
+      { name: "House White (Glass)", price: 11 },
+      { name: "Premium Red (Glass)", price: 18 },
+    ],
+    "Cocktails": [
+      { name: "Margarita", price: 14 },
+      { name: "Old Fashioned", price: 15 },
+      { name: "Paloma", price: 13 },
+    ],
+    "Non-Alcoholic": [
+      { name: "Iced Tea", price: 4 },
+      { name: "Lemonade", price: 5 },
+      { name: "Coffee", price: 4 },
+    ],
+  };
+
+  let menuItemCount = 0;
+  // Create categories and items for the main brewery location as sample
+  const breweryLocation = "loc-southerleigh-brewery";
+  for (const category of menuCategories) {
+    const createdCategory = await prisma.menuCategory.create({
+      data: {
+        locationId: breweryLocation,
+        externalId: `toast-cat-${category.displayOrder}`,
+        name: category.name,
+        displayOrder: category.displayOrder,
+      },
+    });
+
+    const items = menuItemsByCategory[category.name] || [];
+    for (const item of items) {
+      await prisma.menuItem.create({
+        data: {
+          locationId: breweryLocation,
+          categoryId: createdCategory.id,
+          externalId: `toast-item-${category.displayOrder}-${items.indexOf(item)}`,
+          name: item.name,
+          currentPrice: item.price,
+          isActive: true,
+        },
+      });
+      menuItemCount++;
+    }
+  }
+  console.log(`  ✓ MenuCategories: ${menuCategories.length} entries (Brewery)`);
+  console.log(`  ✓ MenuItems: ${menuItemCount} entries (Brewery)`);
+
+  // ==========================================================================
+  // 13. TRANSACTION SUMMARY (7 days sample for brewery)
+  // ==========================================================================
+  console.log("\nCreating transaction summaries...");
+
+  const transactionDays = 7;
+  for (let i = 0; i < transactionDays; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    date.setHours(0, 0, 0, 0);
+
+    // Weekend vs weekday variance
+    const dayOfWeek = date.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6;
+    const multiplier = isWeekend ? 1.35 : 1.0;
+
+    const grossSales = Math.round(24000 * multiplier + (Math.random() - 0.5) * 4000);
+    const discounts = Math.round(grossSales * 0.03);
+    const comps = Math.round(grossSales * 0.01);
+    const voids = Math.round(grossSales * 0.005);
+    const refunds = Math.round(grossSales * 0.002);
+    const netSales = grossSales - discounts - comps - voids - refunds;
+
+    const transactionCount = Math.round(netSales / 75);
+    const cardPercent = 0.85 + Math.random() * 0.05;
+
+    await prisma.transactionSummary.create({
+      data: {
+        locationId: breweryLocation,
+        date,
+        grossSales,
+        discounts,
+        comps,
+        voids,
+        refunds,
+        netSales,
+        cashPayments: Math.round(netSales * (1 - cardPercent) * 0.9),
+        cardPayments: Math.round(netSales * cardPercent),
+        giftCardPayments: Math.round(netSales * (1 - cardPercent) * 0.1),
+        otherPayments: 0,
+        avgCheckSize: Math.round((netSales / transactionCount) * 100) / 100,
+        avgTip: Math.round(netSales * 0.18 / transactionCount * 100) / 100,
+        tipPercent: 18 + Math.round((Math.random() - 0.5) * 4 * 10) / 10,
+        transactionCount,
+      },
+    });
+  }
+  console.log(`  ✓ TransactionSummary: ${transactionDays} days (Brewery)`);
+
+  // ==========================================================================
+  // 14. LABOR DETAIL (7 days sample for brewery)
+  // ==========================================================================
+  console.log("\nCreating labor details...");
+
+  const positions = [
+    { name: "Server", category: "FOH" as const, baseHours: 32, rate: 12 },
+    { name: "Bartender", category: "FOH" as const, baseHours: 28, rate: 14 },
+    { name: "Host", category: "FOH" as const, baseHours: 20, rate: 11 },
+    { name: "Line Cook", category: "BOH" as const, baseHours: 40, rate: 16 },
+    { name: "Prep Cook", category: "BOH" as const, baseHours: 35, rate: 14 },
+    { name: "Dishwasher", category: "BOH" as const, baseHours: 30, rate: 12 },
+    { name: "Sous Chef", category: "BOH" as const, baseHours: 45, rate: 22 },
+  ];
+
+  let laborDetailCount = 0;
+  for (let i = 0; i < transactionDays; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    date.setHours(0, 0, 0, 0);
+
+    const dayOfWeek = date.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6;
+    const laborMultiplier = isWeekend ? 1.2 : 1.0;
+
+    for (const position of positions) {
+      const hoursScheduled = Math.round(position.baseHours * laborMultiplier / 7 * 10) / 10;
+      const variance = 0.9 + Math.random() * 0.2;
+      const hoursWorked = Math.round(hoursScheduled * variance * 10) / 10;
+      const overtime = Math.max(0, hoursWorked - 8);
+
+      await prisma.laborDetail.create({
+        data: {
+          locationId: breweryLocation,
+          date,
+          positionName: position.name,
+          positionCategory: position.category,
+          hoursScheduled,
+          hoursWorked,
+          overtimeHours: overtime,
+          laborCost: Math.round(hoursWorked * position.rate * 100) / 100,
+          avgHourlyRate: position.rate,
+          employeeCount: Math.ceil(hoursWorked / 6),
+        },
+      });
+      laborDetailCount++;
+    }
+  }
+  console.log(`  ✓ LaborDetail: ${laborDetailCount} entries (Brewery)`);
+
+  // ==========================================================================
+  // 15. CATEGORY SALES (7 days sample for brewery)
+  // ==========================================================================
+  console.log("\nCreating category sales...");
+
+  const categoryMix = [
+    { name: "Appetizers", percent: 12 },
+    { name: "Salads", percent: 6 },
+    { name: "Entrees", percent: 32 },
+    { name: "Steaks & Grills", percent: 15 },
+    { name: "Sides", percent: 8 },
+    { name: "Desserts", percent: 5 },
+    { name: "Beer", percent: 10 },
+    { name: "Wine", percent: 6 },
+    { name: "Cocktails", percent: 4 },
+    { name: "Non-Alcoholic", percent: 2 },
+  ];
+
+  let categorySalesCount = 0;
+  for (let i = 0; i < transactionDays; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    date.setHours(0, 0, 0, 0);
+
+    const dayOfWeek = date.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6;
+    const dailyTotal = (isWeekend ? 28000 : 22000) + Math.round((Math.random() - 0.5) * 4000);
+
+    for (const cat of categoryMix) {
+      const revenue = Math.round(dailyTotal * cat.percent / 100);
+      const avgItemPrice = cat.name.includes("Steak") ? 48 : cat.name === "Entrees" ? 28 : 12;
+
+      await prisma.categorySales.create({
+        data: {
+          locationId: breweryLocation,
+          date,
+          categoryName: cat.name,
+          itemsSold: Math.round(revenue / avgItemPrice),
+          totalRevenue: revenue,
+          percentOfSales: cat.percent,
+        },
+      });
+      categorySalesCount++;
+    }
+  }
+  console.log(`  ✓ CategorySales: ${categorySalesCount} entries (Brewery)`);
+
   console.log("\n✅ Seed completed successfully!\n");
 
   // Print summary
@@ -795,6 +1103,12 @@ async function main() {
   console.log(`  Health Score History: ${locations.length * months.length}`);
   console.log(`  AI Insights: ${insightsData.reduce((sum, l) => sum + l.insights.length, 0)}`);
   console.log(`  Holidays: ${holidays.length}`);
+  console.log(`  Seating Areas: ${seatingAreaCount}`);
+  console.log(`  Menu Categories: ${menuCategories.length}`);
+  console.log(`  Menu Items: ${menuItemCount}`);
+  console.log(`  Transaction Summaries: ${transactionDays}`);
+  console.log(`  Labor Details: ${laborDetailCount}`);
+  console.log(`  Category Sales: ${categorySalesCount}`);
   console.log(`\n📝 Demo user password: ${DEFAULT_PASSWORD}`);
 }
 

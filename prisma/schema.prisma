@@ -63,39 +63,47 @@ model RestaurantGroup {
 }
 
 model Location {
-  id                 String               @id @default(cuid())
-  restaurantGroupId  String
-  name               String
-  neighborhood       String?              // e.g., "Pearl", "The Rim", "Downtown"
-  address            String?
-  city               String?
-  state              String?
-  zipCode            String?
-  latitude           Float?
-  longitude          Float?
-  timezone           String               @default("America/Chicago")
-  conceptType        String?
-  isActive           Boolean              @default(true)
-  isDefault          Boolean              @default(false)
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  aiInsights         AIInsight[]
-  apiLogs            ApiLog[]
-  customerLoyalty    CustomerLoyalty[]
-  dailyMetrics       DailyMetrics[]
-  daypartMetrics     DaypartMetrics[]
-  healthScoreConfig  HealthScoreConfig?
-  healthScoreHistory HealthScoreHistory[]
-  integrations       Integration[]
-  localEvents        LocalEvent[]
-  restaurantGroup    RestaurantGroup      @relation(fields: [restaurantGroupId], references: [id], onDelete: Cascade)
-  monthlyMetrics     MonthlyMetrics[]
-  prMentions         PRMention[]
-  reviews            Review[]
-  reviewMetrics      ReviewMetrics[]
-  socialAccounts     SocialAccount[]
-  weatherData        WeatherData[]
-  websiteVisibility  WebsiteVisibility[]
+  id                  String               @id @default(cuid())
+  restaurantGroupId   String
+  name                String
+  neighborhood        String?              // e.g., "Pearl", "The Rim", "Downtown"
+  address             String?
+  city                String?
+  state               String?
+  zipCode             String?
+  latitude            Float?
+  longitude           Float?
+  timezone            String               @default("America/Chicago")
+  conceptType         String?
+  isActive            Boolean              @default(true)
+  isDefault           Boolean              @default(false)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  aiInsights          AIInsight[]
+  apiLogs             ApiLog[]
+  categorySales       CategorySales[]
+  customerLoyalty     CustomerLoyalty[]
+  dailyMetrics        DailyMetrics[]
+  daypartMetrics      DaypartMetrics[]
+  healthScoreConfig   HealthScoreConfig?
+  healthScoreHistory  HealthScoreHistory[]
+  insightCaches       InsightCache[]
+  integrations        Integration[]
+  laborDetails        LaborDetail[]
+  localEvents         LocalEvent[]
+  restaurantGroup     RestaurantGroup      @relation(fields: [restaurantGroupId], references: [id], onDelete: Cascade)
+  menuCategories      MenuCategory[]
+  menuItems           MenuItem[]
+  menuItemSales       MenuItemSales[]
+  monthlyMetrics      MonthlyMetrics[]
+  prMentions          PRMention[]
+  reviews             Review[]
+  reviewMetrics       ReviewMetrics[]
+  seatingAreas        SeatingArea[]
+  socialAccounts      SocialAccount[]
+  transactionSummary  TransactionSummary[]
+  weatherData         WeatherData[]
+  websiteVisibility   WebsiteVisibility[]
 
   @@index([restaurantGroupId])
 }
@@ -848,6 +856,166 @@ model DemoFeedback {
   @@map("demo_feedback")
 }
 
+// =============================================================================
+// OPERATIONAL WAREHOUSE TABLES (Phase 2b)
+// Pre-aggregated data for AI analysis and reporting
+// =============================================================================
+
+model MenuCategory {
+  id           String     @id @default(cuid())
+  locationId   String
+  externalId   String?    // Toast/R365 category ID
+  name         String
+  displayOrder Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  location     Location   @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  menuItems    MenuItem[]
+
+  @@unique([locationId, externalId])
+  @@index([locationId])
+}
+
+model MenuItem {
+  id             String          @id @default(cuid())
+  locationId     String
+  categoryId     String?
+  externalId     String?         // Toast/R365 item ID
+  name           String
+  description    String?
+  currentPrice   Decimal         @db.Decimal(10, 2)
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  category       MenuCategory?   @relation(fields: [categoryId], references: [id])
+  location       Location        @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  menuItemSales  MenuItemSales[]
+
+  @@unique([locationId, externalId])
+  @@index([locationId])
+  @@index([categoryId])
+}
+
+model MenuItemSales {
+  id                  String   @id @default(cuid())
+  locationId          String
+  menuItemId          String
+  weekStartDate       DateTime @db.Date
+  quantitySold        Int      @default(0)
+  totalRevenue        Decimal  @default(0) @db.Decimal(12, 2)
+  avgPrice            Decimal? @db.Decimal(10, 2)
+  foodCostActual      Decimal? @db.Decimal(12, 2)
+  foodCostTheoretical Decimal? @db.Decimal(12, 2)
+  profitMargin        Decimal? @db.Decimal(5, 2)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  location            Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  menuItem            MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, menuItemId, weekStartDate])
+  @@index([locationId, weekStartDate])
+  @@index([menuItemId])
+}
+
+model LaborDetail {
+  id               String           @id @default(cuid())
+  locationId       String
+  date             DateTime         @db.Date
+  positionName     String           // e.g., "Server", "Line Cook", "Host"
+  positionCategory PositionCategory // FOH or BOH
+  hoursScheduled   Decimal          @default(0) @db.Decimal(8, 2)
+  hoursWorked      Decimal          @default(0) @db.Decimal(8, 2)
+  overtimeHours    Decimal          @default(0) @db.Decimal(8, 2)
+  laborCost        Decimal          @default(0) @db.Decimal(12, 2)
+  avgHourlyRate    Decimal?         @db.Decimal(8, 2)
+  employeeCount    Int              @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  location         Location         @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, date, positionName])
+  @@index([locationId, date])
+  @@index([positionCategory])
+}
+
+model TransactionSummary {
+  id               String   @id @default(cuid())
+  locationId       String
+  date             DateTime @db.Date
+  grossSales       Decimal  @default(0) @db.Decimal(12, 2)
+  discounts        Decimal  @default(0) @db.Decimal(12, 2)
+  comps            Decimal  @default(0) @db.Decimal(12, 2)
+  voids            Decimal  @default(0) @db.Decimal(12, 2)
+  refunds          Decimal  @default(0) @db.Decimal(12, 2)
+  netSales         Decimal  @default(0) @db.Decimal(12, 2)
+  cashPayments     Decimal  @default(0) @db.Decimal(12, 2)
+  cardPayments     Decimal  @default(0) @db.Decimal(12, 2)
+  giftCardPayments Decimal  @default(0) @db.Decimal(12, 2)
+  otherPayments    Decimal  @default(0) @db.Decimal(12, 2)
+  avgCheckSize     Decimal? @db.Decimal(10, 2)
+  avgTip           Decimal? @db.Decimal(10, 2)
+  tipPercent       Decimal? @db.Decimal(5, 2)
+  transactionCount Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  location         Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, date])
+  @@index([locationId, date])
+}
+
+model CategorySales {
+  id             String   @id @default(cuid())
+  locationId     String
+  date           DateTime @db.Date
+  categoryName   String   // e.g., "Appetizers", "Entrees", "Beer", "Wine"
+  itemsSold      Int      @default(0)
+  totalRevenue   Decimal  @default(0) @db.Decimal(12, 2)
+  percentOfSales Decimal? @db.Decimal(5, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  location       Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, date, categoryName])
+  @@index([locationId, date])
+  @@index([categoryName])
+}
+
+model InsightCache {
+  id          String       @id @default(cuid())
+  locationId  String
+  periodType  InsightPeriod // DAILY, WEEKLY, MONTHLY
+  periodStart DateTime     @db.Date
+  periodEnd   DateTime     @db.Date
+  cacheType   String       // e.g., "sales_summary", "labor_summary", "menu_performance"
+  data        Json         // Pre-calculated metrics JSON blob
+  generatedAt DateTime     @default(now())
+  expiresAt   DateTime
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  location    Location     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, periodType, periodStart, cacheType])
+  @@index([locationId, cacheType])
+  @@index([expiresAt])
+}
+
+model SeatingArea {
+  id                String   @id @default(cuid())
+  locationId        String
+  name              String   // "Patio", "Main Dining", "Bar", "Private Room"
+  seats             Int      @default(0)
+  isOutdoor         Boolean  @default(false)
+  weatherDependent  Boolean  @default(false)
+  avgRevenuePerSeat Decimal? @db.Decimal(10, 2) // Calculated field
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  location          Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, name])
+  @@index([locationId])
+}
+
 enum PlanType {
   STARTER
   PRO
@@ -877,6 +1045,11 @@ enum Daypart {
   AFTERNOON
   DINNER
   LATE_NIGHT
+}
+
+enum PositionCategory {
+  FOH
+  BOH
 }
 
 enum Trend {
