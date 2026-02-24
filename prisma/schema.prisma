@@ -66,6 +66,7 @@ model Location {
   id                 String               @id @default(cuid())
   restaurantGroupId  String
   name               String
+  neighborhood       String?              // e.g., "Pearl", "The Rim", "Downtown"
   address            String?
   city               String?
   state              String?

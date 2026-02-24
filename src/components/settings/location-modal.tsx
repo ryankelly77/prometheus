@@ -19,14 +19,108 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { US_STATES, US_TIMEZONES, CONCEPT_TYPES } from '@/lib/mock-data/settings'
-import type { Location } from '@/types/settings'
+
+const US_STATES = [
+  { value: 'AL', label: 'Alabama' },
+  { value: 'AK', label: 'Alaska' },
+  { value: 'AZ', label: 'Arizona' },
+  { value: 'AR', label: 'Arkansas' },
+  { value: 'CA', label: 'California' },
+  { value: 'CO', label: 'Colorado' },
+  { value: 'CT', label: 'Connecticut' },
+  { value: 'DE', label: 'Delaware' },
+  { value: 'FL', label: 'Florida' },
+  { value: 'GA', label: 'Georgia' },
+  { value: 'HI', label: 'Hawaii' },
+  { value: 'ID', label: 'Idaho' },
+  { value: 'IL', label: 'Illinois' },
+  { value: 'IN', label: 'Indiana' },
+  { value: 'IA', label: 'Iowa' },
+  { value: 'KS', label: 'Kansas' },
+  { value: 'KY', label: 'Kentucky' },
+  { value: 'LA', label: 'Louisiana' },
+  { value: 'ME', label: 'Maine' },
+  { value: 'MD', label: 'Maryland' },
+  { value: 'MA', label: 'Massachusetts' },
+  { value: 'MI', label: 'Michigan' },
+  { value: 'MN', label: 'Minnesota' },
+  { value: 'MS', label: 'Mississippi' },
+  { value: 'MO', label: 'Missouri' },
+  { value: 'MT', label: 'Montana' },
+  { value: 'NE', label: 'Nebraska' },
+  { value: 'NV', label: 'Nevada' },
+  { value: 'NH', label: 'New Hampshire' },
+  { value: 'NJ', label: 'New Jersey' },
+  { value: 'NM', label: 'New Mexico' },
+  { value: 'NY', label: 'New York' },
+  { value: 'NC', label: 'North Carolina' },
+  { value: 'ND', label: 'North Dakota' },
+  { value: 'OH', label: 'Ohio' },
+  { value: 'OK', label: 'Oklahoma' },
+  { value: 'OR', label: 'Oregon' },
+  { value: 'PA', label: 'Pennsylvania' },
+  { value: 'RI', label: 'Rhode Island' },
+  { value: 'SC', label: 'South Carolina' },
+  { value: 'SD', label: 'South Dakota' },
+  { value: 'TN', label: 'Tennessee' },
+  { value: 'TX', label: 'Texas' },
+  { value: 'UT', label: 'Utah' },
+  { value: 'VT', label: 'Vermont' },
+  { value: 'VA', label: 'Virginia' },
+  { value: 'WA', label: 'Washington' },
+  { value: 'WV', label: 'West Virginia' },
+  { value: 'WI', label: 'Wisconsin' },
+  { value: 'WY', label: 'Wyoming' },
+]
+
+const US_TIMEZONES = [
+  { value: 'America/New_York', label: 'Eastern (ET)' },
+  { value: 'America/Chicago', label: 'Central (CT)' },
+  { value: 'America/Denver', label: 'Mountain (MT)' },
+  { value: 'America/Los_Angeles', label: 'Pacific (PT)' },
+  { value: 'America/Anchorage', label: 'Alaska (AKT)' },
+  { value: 'Pacific/Honolulu', label: 'Hawaii (HT)' },
+]
+
+const CONCEPT_TYPES = [
+  { value: 'full_service', label: 'Full Service Restaurant' },
+  { value: 'fast_casual', label: 'Fast Casual' },
+  { value: 'quick_service', label: 'Quick Service' },
+  { value: 'fine_dining', label: 'Fine Dining' },
+  { value: 'bar', label: 'Bar / Lounge' },
+  { value: 'cafe', label: 'Cafe / Coffee Shop' },
+  { value: 'food_truck', label: 'Food Truck' },
+  { value: 'catering', label: 'Catering' },
+  { value: 'ghost_kitchen', label: 'Ghost Kitchen' },
+  { value: 'other', label: 'Other' },
+]
+
+interface Location {
+  id: string
+  name: string
+  neighborhood?: string
+  address: string
+  city: string
+  state: string
+  zip: string
+  timezone: string
+  conceptType?: string
+  restaurantGroupId?: string
+  isDefault?: boolean
+}
+
+interface RestaurantGroup {
+  id: string
+  name: string
+}
 
 interface LocationModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   location?: Location | null
   onSave: (location: Partial<Location>) => void
+  isSaving?: boolean
+  restaurantGroups?: RestaurantGroup[]
 }
 
 export function LocationModal({
@@ -34,54 +128,57 @@ export function LocationModal({
   onOpenChange,
   location,
   onSave,
+  isSaving = false,
+  restaurantGroups = [],
 }: LocationModalProps) {
   const [formData, setFormData] = useState({
     name: '',
+    neighborhood: '',
     address: '',
     city: '',
     state: 'TX',
     zip: '',
     timezone: 'America/Chicago',
     conceptType: 'full_service',
-    operatingHours: '',
+    restaurantGroupId: '',
+    isDefault: false,
   })
-  const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
     if (location) {
       setFormData({
-        name: location.name,
-        address: location.address,
-        city: location.city,
-        state: location.state,
-        zip: location.zip,
-        timezone: location.timezone,
-        conceptType: location.conceptType,
-        operatingHours: location.operatingHours || '',
+        name: location.name || '',
+        neighborhood: location.neighborhood || '',
+        address: location.address || '',
+        city: location.city || '',
+        state: location.state || 'TX',
+        zip: location.zip || '',
+        timezone: location.timezone || 'America/Chicago',
+        conceptType: location.conceptType || 'full_service',
+        restaurantGroupId: location.restaurantGroupId || restaurantGroups[0]?.id || '',
+        isDefault: location.isDefault || false,
       })
     } else {
       setFormData({
         name: '',
+        neighborhood: '',
         address: '',
         city: '',
         state: 'TX',
         zip: '',
         timezone: 'America/Chicago',
         conceptType: 'full_service',
-        operatingHours: '',
+        restaurantGroupId: restaurantGroups[0]?.id || '',
+        isDefault: false,
       })
     }
-  }, [location, open])
+  }, [location, open, restaurantGroups])
 
-  const handleSave = async () => {
-    setIsSaving(true)
-    await new Promise((resolve) => setTimeout(resolve, 500))
+  const handleSave = () => {
     onSave(formData)
-    setIsSaving(false)
-    onOpenChange(false)
   }
 
-  const isValid = formData.name && formData.address && formData.city && formData.state && formData.zip
+  const isValid = formData.name.trim().length > 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -105,29 +202,64 @@ export function LocationModal({
               id="name"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="e.g., Downtown Location"
+              placeholder="e.g., Boiler House"
             />
+            <p className="text-xs text-muted-foreground">
+              This is the display name shown throughout the app
+            </p>
           </div>
+
+          {/* Neighborhood / Area */}
+          <div className="space-y-2">
+            <Label htmlFor="neighborhood">Neighborhood / Area</Label>
+            <Input
+              id="neighborhood"
+              value={formData.neighborhood}
+              onChange={(e) => setFormData({ ...formData, neighborhood: e.target.value })}
+              placeholder="e.g., Pearl, The Rim, Downtown"
+            />
+            <p className="text-xs text-muted-foreground">
+              Optional area name displayed with city on cards
+            </p>
+          </div>
+
+          {/* Restaurant Group (only for new locations) */}
+          {!location && restaurantGroups.length > 1 && (
+            <div className="space-y-2">
+              <Label htmlFor="restaurantGroup">Restaurant Group</Label>
+              <Select
+                value={formData.restaurantGroupId}
+                onValueChange={(value) => setFormData({ ...formData, restaurantGroupId: value })}
+              >
+                <SelectTrigger id="restaurantGroup">
+                  <SelectValue placeholder="Select a group" />
+                </SelectTrigger>
+                <SelectContent>
+                  {restaurantGroups.map((group) => (
+                    <SelectItem key={group.id} value={group.id}>
+                      {group.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Address */}
           <div className="space-y-2">
-            <Label htmlFor="address">
-              Address <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="address">Address</Label>
             <Input
               id="address"
               value={formData.address}
               onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-              placeholder="123 Main Street"
+              placeholder="312 Pearl Pkwy"
             />
           </div>
 
           {/* City, State, Zip */}
           <div className="grid grid-cols-6 gap-3">
             <div className="col-span-3 space-y-2">
-              <Label htmlFor="city">
-                City <span className="text-destructive">*</span>
-              </Label>
+              <Label htmlFor="city">City</Label>
               <Input
                 id="city"
                 value={formData.city}
@@ -136,9 +268,7 @@ export function LocationModal({
               />
             </div>
             <div className="col-span-1 space-y-2">
-              <Label htmlFor="state">
-                State <span className="text-destructive">*</span>
-              </Label>
+              <Label htmlFor="state">State</Label>
               <Select
                 value={formData.state}
                 onValueChange={(value) => setFormData({ ...formData, state: value })}
@@ -156,9 +286,7 @@ export function LocationModal({
               </Select>
             </div>
             <div className="col-span-2 space-y-2">
-              <Label htmlFor="zip">
-                Zip <span className="text-destructive">*</span>
-              </Label>
+              <Label htmlFor="zip">Zip</Label>
               <Input
                 id="zip"
                 value={formData.zip}
@@ -170,9 +298,7 @@ export function LocationModal({
 
           {/* Timezone */}
           <div className="space-y-2">
-            <Label htmlFor="timezone">
-              Timezone <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="timezone">Timezone</Label>
             <Select
               value={formData.timezone}
               onValueChange={(value) => setFormData({ ...formData, timezone: value })}
@@ -209,25 +335,14 @@ export function LocationModal({
               </SelectContent>
             </Select>
           </div>
-
-          {/* Operating Hours */}
-          <div className="space-y-2">
-            <Label htmlFor="operatingHours">Operating Hours (optional)</Label>
-            <Input
-              id="operatingHours"
-              value={formData.operatingHours}
-              onChange={(e) => setFormData({ ...formData, operatingHours: e.target.value })}
-              placeholder="Mon-Thu: 11am-10pm, Fri-Sat: 11am-11pm, Sun: 10am-9pm"
-            />
-          </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={!isValid || isSaving}>
-            {isSaving ? 'Saving...' : location ? 'Save Changes' : 'Save Location'}
+            {isSaving ? 'Saving...' : location ? 'Save Changes' : 'Add Location'}
           </Button>
         </DialogFooter>
       </DialogContent>

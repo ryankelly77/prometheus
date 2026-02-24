@@ -5,6 +5,7 @@ import { requireOrganization } from "@/lib/auth";
 interface LocationOverview {
   id: string;
   name: string;
+  neighborhood: string | null;
   city: string | null;
   state: string | null;
   conceptType: string | null;
@@ -164,6 +165,7 @@ export async function GET() {
       return {
         id: loc.id,
         name: loc.name,
+        neighborhood: loc.neighborhood,
         city: loc.city,
         state: loc.state,
         conceptType: loc.conceptType,

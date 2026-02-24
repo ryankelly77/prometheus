@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 export interface LocationData {
   id: string;
   name: string;
+  neighborhood: string | null;
   city: string | null;
   state: string | null;
   conceptType: string | null;
@@ -170,9 +171,11 @@ export function LocationCard({ location, onClick }: LocationCardProps) {
           {/* Header */}
           <div className="mb-4">
             <h3 className="font-semibold text-base truncate">{location.name}</h3>
-            {(location.city || location.state) && (
+            {(location.neighborhood || location.city || location.state) && (
               <p className="text-sm text-muted-foreground truncate">
-                {[location.city, location.state].filter(Boolean).join(", ")}
+                {location.neighborhood
+                  ? `${location.neighborhood} · ${[location.city, location.state].filter(Boolean).join(", ")}`
+                  : [location.city, location.state].filter(Boolean).join(", ")}
               </p>
             )}
           </div>

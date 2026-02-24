@@ -84,9 +84,11 @@ export function LocationRow({ location, onClick }: LocationRowProps) {
       {/* Location Name */}
       <div className="min-w-0 flex-1">
         <p className="font-semibold truncate">{location.name}</p>
-        {(location.city || location.state) && (
+        {(location.neighborhood || location.city || location.state) && (
           <p className="text-sm text-muted-foreground truncate">
-            {[location.city, location.state].filter(Boolean).join(", ")}
+            {location.neighborhood
+              ? `${location.neighborhood} · ${[location.city, location.state].filter(Boolean).join(", ")}`
+              : [location.city, location.state].filter(Boolean).join(", ")}
           </p>
         )}
       </div>
