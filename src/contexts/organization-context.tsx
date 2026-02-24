@@ -63,12 +63,13 @@ export function OrganizationProvider({
 
       const response = await fetch("/api/organizations/branding");
       if (!response.ok) {
-        if (response.status === 401) {
-          // Not authenticated - clear org
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
+          // Not authenticated, no org membership, or profile not found - clear org
           setOrganization(null);
           return;
         }
-        throw new Error("Failed to fetch organization");
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to fetch organization");
       }
 
       const data = await response.json();
