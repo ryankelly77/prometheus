@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
 import { UserIntegrationCard, ManagedIntegrationCard, SocialChoiceCard } from './integration-card'
+import { ToastConnectModal } from './toast-connect-modal'
+import { ToastSyncModal } from './toast-sync-modal'
 import { mockIntegrations, mockSocialPreference } from '@/lib/mock-data/settings'
 import type { Integration, SocialMediaPreference } from '@/types/settings'
 
@@ -56,6 +58,10 @@ export function IntegrationsTab() {
   const [socialPreference, setSocialPreference] = useState<SocialMediaPreference>(mockSocialPreference)
   const [comingSoonModal, setComingSoonModal] = useState(false)
   const [selectedIntegration, setSelectedIntegration] = useState<Integration | null>(null)
+  const [toastModalOpen, setToastModalOpen] = useState(false)
+  const [toastSyncModalOpen, setToastSyncModalOpen] = useState(false)
+  const [toastSyncIntegrationId, setToastSyncIntegrationId] = useState<string | null>(null)
+  const [toastSyncLocationName, setToastSyncLocationName] = useState<string | undefined>(undefined)
 
   // Filter integrations by connection type
   const userIntegrations = integrations.filter((i) => i.connectionType === 'user')
@@ -77,10 +83,71 @@ export function IntegrationsTab() {
 
   const handleConnect = (integration: Integration) => {
     setSelectedIntegration(integration)
+
+    // Open integration-specific modals
+    if (integration.type === 'toast') {
+      setToastModalOpen(true)
+      return
+    }
+
+    // Default to coming soon modal for other integrations
     setComingSoonModal(true)
   }
 
-  const handleReconnect = (integration: Integration) => {
+  const handleToastConnectSuccess = (integrationId: string, locationName: string) => {
+    // Update the Toast integration status in local state
+    setIntegrations(
+      integrations.map((i) =>
+        i.type === 'toast'
+          ? {
+              ...i,
+              status: 'connected',
+              lastSyncAt: new Date().toISOString(),
+              connectedLocationName: locationName,
+            }
+          : i
+      )
+    )
+  }
+
+  const handleAddConnection = (integration: Integration) => {
+    // For Toast, open the connect modal to add another location
+    if (integration.type === 'toast') {
+      setSelectedIntegration(integration)
+      setToastModalOpen(true)
+    }
+  }
+
+  const handleReconnect = async (integration: Integration) => {
+    // For Toast, open the sync modal with date range picker
+    if (integration.type === 'toast') {
+      try {
+        // Get the integration ID from the database
+        const statusResponse = await fetch(`/api/integrations/toast/status?locationId=${integration.id}`)
+        const statusData = await statusResponse.json()
+
+        if (statusData.integrationId) {
+          setToastSyncIntegrationId(statusData.integrationId)
+          setToastSyncLocationName(integration.connectedLocationName)
+          setToastSyncModalOpen(true)
+        } else {
+          toast({
+            title: 'Not Connected',
+            description: 'Please connect Toast first before syncing.',
+            variant: 'destructive',
+          })
+        }
+      } catch (error) {
+        toast({
+          title: 'Error',
+          description: error instanceof Error ? error.message : 'Failed to get integration status',
+          variant: 'destructive',
+        })
+      }
+      return
+    }
+
+    // Default behavior for other integrations
     toast({
       title: 'Reconnecting...',
       description: `Reconnecting to ${integration.name}...`,
@@ -150,6 +217,21 @@ export function IntegrationsTab() {
     setComingSoonModal(true)
   }
 
+  const handleToastSyncComplete = () => {
+    // Update the Toast integration status
+    setIntegrations(
+      integrations.map((i) =>
+        i.type === 'toast'
+          ? { ...i, lastSyncAt: new Date().toISOString() }
+          : i
+      )
+    )
+    toast({
+      title: 'Sync Complete',
+      description: 'Toast data has been synced successfully.',
+    })
+  }
+
   return (
     <div className="space-y-6">
       {/* User-Connected Integrations */}
@@ -180,6 +262,7 @@ export function IntegrationsTab() {
                   onReconnect={handleReconnect}
                   onDisconnect={handleDisconnect}
                   onViewData={handleViewData}
+                  onAddConnection={integration.type === 'toast' ? handleAddConnection : undefined}
                 />
               ))}
             </div>
@@ -355,6 +438,24 @@ export function IntegrationsTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Toast Connect Modal */}
+      <ToastConnectModal
+        open={toastModalOpen}
+        onOpenChange={setToastModalOpen}
+        onSuccess={handleToastConnectSuccess}
+      />
+
+      {/* Toast Sync Modal */}
+      {toastSyncIntegrationId && (
+        <ToastSyncModal
+          open={toastSyncModalOpen}
+          onOpenChange={setToastSyncModalOpen}
+          integrationId={toastSyncIntegrationId}
+          locationName={toastSyncLocationName}
+          onSyncComplete={handleToastSyncComplete}
+        />
+      )}
     </div>
   )
 }

@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, Fragment, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { startOfMonth, endOfMonth, format } from 'date-fns'
 import {
   RefreshCw,
   MoreHorizontal,
@@ -12,6 +13,13 @@ import {
   History,
   BarChart3,
   Table2,
+  Loader2,
+  ChevronDown,
+  ChevronRight,
+  UtensilsCrossed,
+  Wine,
+  Users,
+  Receipt,
 } from 'lucide-react'
 import { useLocation } from '@/hooks/use-location'
 import { formatCurrency } from '@/lib/mock-data'
@@ -41,9 +49,34 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Progress } from '@/components/ui/progress'
+
+interface SyncProgress {
+  phase: 'connecting' | 'fetching' | 'processing' | 'saving' | 'complete' | 'error'
+  message: string
+  ordersProcessed: number
+  totalDays: number
+  currentDay: number
+  percentComplete: number
+  error?: string
+}
 
 // Types
 type SyncStatus = 'synced' | 'manual' | 'error' | 'pending'
+
+interface DaypartMetric {
+  id: string
+  date: string
+  daypart: string
+  totalSales: number
+  foodSales: number
+  alcoholSales: number
+  beerSales: number
+  wineSales: number
+  liquorSales: number
+  covers: number
+  checkCount: number
+}
 
 interface DailySalesData {
   id: string
@@ -54,9 +87,24 @@ interface DailySalesData {
   alcoholSales: number
   beerSales: number
   wineSales: number
+  orderCount: number
   status: SyncStatus
   syncedAt?: string
   manualReason?: string
+  dayparts?: DaypartMetric[]
+}
+
+// Format daypart enum to readable name
+function formatDaypart(daypart: string): string {
+  const names: Record<string, string> = {
+    BREAKFAST: 'Breakfast',
+    BRUNCH: 'Brunch',
+    LUNCH: 'Lunch',
+    AFTERNOON: 'Afternoon',
+    DINNER: 'Dinner',
+    LATE_NIGHT: 'Late Night',
+  }
+  return names[daypart] || daypart
 }
 
 // Pre-generated daily data for January 2025 that sums exactly to monthly totals
@@ -72,38 +120,38 @@ interface DailySalesData {
 // - Day1(Wed): 13433, 7966, 1424, 380, 1156
 // Totals: 507855, 301156, 52311, 14203, 41892 ✓
 const mockDailyData: DailySalesData[] = [
-  { id: 'daily-31', date: '2025-01-31', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, status: 'synced', syncedAt: '2025-01-31T06:00:00Z' },
-  { id: 'daily-30', date: '2025-01-30', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, status: 'synced', syncedAt: '2025-01-31T06:00:00Z' },
-  { id: 'daily-29', date: '2025-01-29', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, status: 'synced', syncedAt: '2025-01-30T06:00:00Z' },
-  { id: 'daily-28', date: '2025-01-28', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, status: 'synced', syncedAt: '2025-01-29T06:00:00Z' },
-  { id: 'daily-27', date: '2025-01-27', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, status: 'synced', syncedAt: '2025-01-28T06:00:00Z' },
-  { id: 'daily-26', date: '2025-01-26', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, status: 'synced', syncedAt: '2025-01-27T06:00:00Z' },
-  { id: 'daily-25', date: '2025-01-25', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, status: 'synced', syncedAt: '2025-01-26T06:00:00Z' },
-  { id: 'daily-24', date: '2025-01-24', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, status: 'synced', syncedAt: '2025-01-25T06:00:00Z' },
-  { id: 'daily-23', date: '2025-01-23', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, status: 'synced', syncedAt: '2025-01-24T06:00:00Z' },
-  { id: 'daily-22', date: '2025-01-22', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, status: 'manual', syncedAt: '2025-01-23T06:00:00Z', manualReason: 'Catering order was missing from Toast' },
-  { id: 'daily-21', date: '2025-01-21', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, status: 'synced', syncedAt: '2025-01-22T06:00:00Z' },
-  { id: 'daily-20', date: '2025-01-20', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, status: 'synced', syncedAt: '2025-01-21T06:00:00Z' },
-  { id: 'daily-19', date: '2025-01-19', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, status: 'synced', syncedAt: '2025-01-20T06:00:00Z' },
-  { id: 'daily-18', date: '2025-01-18', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, status: 'synced', syncedAt: '2025-01-19T06:00:00Z' },
-  { id: 'daily-17', date: '2025-01-17', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, status: 'synced', syncedAt: '2025-01-18T06:00:00Z' },
-  { id: 'daily-16', date: '2025-01-16', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, status: 'synced', syncedAt: '2025-01-17T06:00:00Z' },
-  { id: 'daily-15', date: '2025-01-15', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, status: 'manual', syncedAt: '2025-01-16T06:00:00Z', manualReason: 'Gift card adjustment' },
-  { id: 'daily-14', date: '2025-01-14', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, status: 'synced', syncedAt: '2025-01-15T06:00:00Z' },
-  { id: 'daily-13', date: '2025-01-13', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, status: 'synced', syncedAt: '2025-01-14T06:00:00Z' },
-  { id: 'daily-12', date: '2025-01-12', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, status: 'synced', syncedAt: '2025-01-13T06:00:00Z' },
-  { id: 'daily-11', date: '2025-01-11', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, status: 'synced', syncedAt: '2025-01-12T06:00:00Z' },
-  { id: 'daily-10', date: '2025-01-10', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, status: 'synced', syncedAt: '2025-01-11T06:00:00Z' },
-  { id: 'daily-09', date: '2025-01-09', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, status: 'synced', syncedAt: '2025-01-10T06:00:00Z' },
-  { id: 'daily-08', date: '2025-01-08', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, status: 'synced', syncedAt: '2025-01-09T06:00:00Z' },
-  { id: 'daily-07', date: '2025-01-07', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, status: 'synced', syncedAt: '2025-01-08T06:00:00Z' },
-  { id: 'daily-06', date: '2025-01-06', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, status: 'synced', syncedAt: '2025-01-07T06:00:00Z' },
-  { id: 'daily-05', date: '2025-01-05', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, status: 'synced', syncedAt: '2025-01-06T06:00:00Z' },
-  { id: 'daily-04', date: '2025-01-04', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, status: 'synced', syncedAt: '2025-01-05T06:00:00Z' },
-  { id: 'daily-03', date: '2025-01-03', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, status: 'synced', syncedAt: '2025-01-04T06:00:00Z' },
-  { id: 'daily-02', date: '2025-01-02', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, status: 'synced', syncedAt: '2025-01-03T06:00:00Z' },
+  { id: 'daily-31', date: '2025-01-31', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, orderCount: 145, status: 'synced', syncedAt: '2025-01-31T06:00:00Z' },
+  { id: 'daily-30', date: '2025-01-30', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, orderCount: 112, status: 'synced', syncedAt: '2025-01-31T06:00:00Z' },
+  { id: 'daily-29', date: '2025-01-29', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, orderCount: 98, status: 'synced', syncedAt: '2025-01-30T06:00:00Z' },
+  { id: 'daily-28', date: '2025-01-28', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, orderCount: 91, status: 'synced', syncedAt: '2025-01-29T06:00:00Z' },
+  { id: 'daily-27', date: '2025-01-27', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, orderCount: 78, status: 'synced', syncedAt: '2025-01-28T06:00:00Z' },
+  { id: 'daily-26', date: '2025-01-26', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, orderCount: 138, status: 'synced', syncedAt: '2025-01-27T06:00:00Z' },
+  { id: 'daily-25', date: '2025-01-25', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, orderCount: 162, status: 'synced', syncedAt: '2025-01-26T06:00:00Z' },
+  { id: 'daily-24', date: '2025-01-24', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, orderCount: 145, status: 'synced', syncedAt: '2025-01-25T06:00:00Z' },
+  { id: 'daily-23', date: '2025-01-23', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, orderCount: 112, status: 'synced', syncedAt: '2025-01-24T06:00:00Z' },
+  { id: 'daily-22', date: '2025-01-22', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, orderCount: 98, status: 'manual', syncedAt: '2025-01-23T06:00:00Z', manualReason: 'Catering order was missing from Toast' },
+  { id: 'daily-21', date: '2025-01-21', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, orderCount: 91, status: 'synced', syncedAt: '2025-01-22T06:00:00Z' },
+  { id: 'daily-20', date: '2025-01-20', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, orderCount: 78, status: 'synced', syncedAt: '2025-01-21T06:00:00Z' },
+  { id: 'daily-19', date: '2025-01-19', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, orderCount: 138, status: 'synced', syncedAt: '2025-01-20T06:00:00Z' },
+  { id: 'daily-18', date: '2025-01-18', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, orderCount: 162, status: 'synced', syncedAt: '2025-01-19T06:00:00Z' },
+  { id: 'daily-17', date: '2025-01-17', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, orderCount: 145, status: 'synced', syncedAt: '2025-01-18T06:00:00Z' },
+  { id: 'daily-16', date: '2025-01-16', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, orderCount: 112, status: 'synced', syncedAt: '2025-01-17T06:00:00Z' },
+  { id: 'daily-15', date: '2025-01-15', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, orderCount: 98, status: 'manual', syncedAt: '2025-01-16T06:00:00Z', manualReason: 'Gift card adjustment' },
+  { id: 'daily-14', date: '2025-01-14', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, orderCount: 91, status: 'synced', syncedAt: '2025-01-15T06:00:00Z' },
+  { id: 'daily-13', date: '2025-01-13', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, orderCount: 78, status: 'synced', syncedAt: '2025-01-14T06:00:00Z' },
+  { id: 'daily-12', date: '2025-01-12', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, orderCount: 138, status: 'synced', syncedAt: '2025-01-13T06:00:00Z' },
+  { id: 'daily-11', date: '2025-01-11', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, orderCount: 162, status: 'synced', syncedAt: '2025-01-12T06:00:00Z' },
+  { id: 'daily-10', date: '2025-01-10', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, orderCount: 145, status: 'synced', syncedAt: '2025-01-11T06:00:00Z' },
+  { id: 'daily-09', date: '2025-01-09', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, orderCount: 112, status: 'synced', syncedAt: '2025-01-10T06:00:00Z' },
+  { id: 'daily-08', date: '2025-01-08', dayOfWeek: 'Wed', totalSales: 13425, foodSales: 7961, alcoholSales: 1382, beerSales: 375, wineSales: 1106, orderCount: 98, status: 'synced', syncedAt: '2025-01-09T06:00:00Z' },
+  { id: 'daily-07', date: '2025-01-07', dayOfWeek: 'Tue', totalSales: 12442, foodSales: 7378, alcoholSales: 1280, beerSales: 348, wineSales: 1024, orderCount: 91, status: 'synced', syncedAt: '2025-01-08T06:00:00Z' },
+  { id: 'daily-06', date: '2025-01-06', dayOfWeek: 'Mon', totalSales: 10805, foodSales: 6407, alcoholSales: 1112, beerSales: 302, wineSales: 890, orderCount: 78, status: 'synced', syncedAt: '2025-01-07T06:00:00Z' },
+  { id: 'daily-05', date: '2025-01-05', dayOfWeek: 'Sun', totalSales: 19482, foodSales: 11553, alcoholSales: 2005, beerSales: 545, wineSales: 1605, orderCount: 138, status: 'synced', syncedAt: '2025-01-06T06:00:00Z' },
+  { id: 'daily-04', date: '2025-01-04', dayOfWeek: 'Sat', totalSales: 22429, foodSales: 13301, alcoholSales: 2309, beerSales: 627, wineSales: 1849, orderCount: 162, status: 'synced', syncedAt: '2025-01-05T06:00:00Z' },
+  { id: 'daily-03', date: '2025-01-03', dayOfWeek: 'Fri', totalSales: 20956, foodSales: 12426, alcoholSales: 2157, beerSales: 586, wineSales: 1727, orderCount: 145, status: 'synced', syncedAt: '2025-01-04T06:00:00Z' },
+  { id: 'daily-02', date: '2025-01-02', dayOfWeek: 'Thu', totalSales: 15062, foodSales: 8932, alcoholSales: 1550, beerSales: 421, wineSales: 1241, orderCount: 112, status: 'synced', syncedAt: '2025-01-03T06:00:00Z' },
   // Day 1 adjusted to make totals exact: 507855, 301156, 52311, 14203, 41892
-  { id: 'daily-01', date: '2025-01-01', dayOfWeek: 'Wed', totalSales: 13433, foodSales: 7966, alcoholSales: 1424, beerSales: 380, wineSales: 1156, status: 'synced', syncedAt: '2025-01-02T06:00:00Z' },
+  { id: 'daily-01', date: '2025-01-01', dayOfWeek: 'Wed', totalSales: 13433, foodSales: 7966, alcoholSales: 1424, beerSales: 380, wineSales: 1156, orderCount: 98, status: 'synced', syncedAt: '2025-01-02T06:00:00Z' },
 ]
 
 // Status badge component
@@ -152,13 +200,139 @@ function formatDate(dateStr: string): string {
   })
 }
 
+// Get current month in YYYY-MM format
+function getCurrentPeriod(): string {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
 export default function SalesDataPage() {
   const router = useRouter()
   const { currentLocation, isAllLocations } = useLocation()
-  const [currentPeriod, setCurrentPeriod] = useState('2025-01')
+  const [currentPeriod, setCurrentPeriod] = useState(getCurrentPeriod)
   const [periodType, setPeriodType] = useState<'month' | 'quarter' | 'year'>('month')
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const [isResyncing, setIsResyncing] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [realData, setRealData] = useState<DailySalesData[]>([])
+  const [hasRealData, setHasRealData] = useState(false)
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
+  const [integrationId, setIntegrationId] = useState<string | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const abortControllerRef = useRef<AbortController | null>(null)
+
+  // Toggle expanded row
+  const toggleExpanded = (id: string) => {
+    const newExpanded = new Set(expandedRows)
+    if (newExpanded.has(id)) {
+      newExpanded.delete(id)
+    } else {
+      newExpanded.add(id)
+    }
+    setExpandedRows(newExpanded)
+  }
+
+  // Fetch real data from API
+  useEffect(() => {
+    async function fetchSalesData() {
+      try {
+        setIsLoading(true)
+        const params = new URLSearchParams()
+
+        if (currentLocation?.id) {
+          params.set('locationId', currentLocation.id)
+        }
+
+        // Parse period to get date range
+        const [year, month] = currentPeriod.split('-').map(Number)
+        const startDate = new Date(year, month - 1, 1)
+        const endDate = new Date(year, month, 0) // Last day of month
+        params.set('startDate', startDate.toISOString().slice(0, 10))
+        params.set('endDate', endDate.toISOString().slice(0, 10))
+
+        const response = await fetch(`/api/sales/daily?${params.toString()}`)
+        const result = await response.json()
+
+        if (result.data && result.data.length > 0) {
+          // Group daypart metrics by date
+          const daypartsByDate: Record<string, DaypartMetric[]> = {}
+          if (result.daypartMetrics) {
+            for (const dp of result.daypartMetrics) {
+              const dateStr = typeof dp.date === 'string'
+                ? dp.date.slice(0, 10)
+                : new Date(dp.date).toISOString().slice(0, 10)
+              if (!daypartsByDate[dateStr]) {
+                daypartsByDate[dateStr] = []
+              }
+              daypartsByDate[dateStr].push({
+                id: dp.id,
+                date: dateStr,
+                daypart: dp.daypart,
+                totalSales: Number(dp.totalSales) || 0,
+                foodSales: Number(dp.foodSales) || 0,
+                alcoholSales: Number(dp.alcoholSales) || 0,
+                beerSales: Number(dp.beerSales) || 0,
+                wineSales: Number(dp.wineSales) || 0,
+                liquorSales: Number(dp.liquorSales) || 0,
+                covers: Number(dp.covers) || 0,
+                checkCount: Number(dp.checkCount) || 0,
+              })
+            }
+          }
+
+          // Transform API data to match our interface
+          const transformedData: DailySalesData[] = result.data.map((item: {
+            id: string
+            date: string
+            dayOfWeek: string
+            netSales: number
+            grossSales: number
+            transactionCount?: number
+            status: SyncStatus
+            syncedAt?: string
+          }) => {
+            const dayparts = daypartsByDate[item.date] || []
+            // Sum up category sales from daypart metrics
+            const foodSales = dayparts.reduce((sum, dp) => sum + dp.foodSales, 0)
+            const alcoholSales = dayparts.reduce((sum, dp) => sum + dp.alcoholSales, 0)
+            const beerSales = dayparts.reduce((sum, dp) => sum + dp.beerSales, 0)
+            const wineSales = dayparts.reduce((sum, dp) => sum + dp.wineSales, 0)
+            // Get order count from transactionCount (API) or sum checkCount from dayparts
+            const orderCount = item.transactionCount || dayparts.reduce((sum, dp) => sum + dp.checkCount, 0)
+
+            return {
+              id: item.id,
+              date: item.date,
+              dayOfWeek: item.dayOfWeek,
+              totalSales: item.netSales || item.grossSales,
+              foodSales,
+              alcoholSales,
+              beerSales,
+              wineSales,
+              orderCount,
+              status: item.status || 'synced',
+              syncedAt: item.syncedAt,
+              dayparts,
+            }
+          })
+          setRealData(transformedData)
+          setHasRealData(true)
+        } else {
+          setHasRealData(false)
+        }
+      } catch (error) {
+        console.error('Failed to fetch sales data:', error)
+        setHasRealData(false)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    fetchSalesData()
+  }, [currentLocation?.id, currentPeriod, refreshKey])
 
   const handleTabChange = (value: string) => {
     if (value === 'charts') {
@@ -166,8 +340,25 @@ export default function SalesDataPage() {
     }
   }
 
-  // Use mock data
-  const dailyData = mockDailyData
+  // Fetch integration ID for current location
+  useEffect(() => {
+    async function fetchIntegrationId() {
+      if (!currentLocation?.id) return
+      try {
+        const response = await fetch(`/api/integrations/toast/status?locationId=${currentLocation.id}`)
+        const data = await response.json()
+        if (data.integrationId) {
+          setIntegrationId(data.integrationId)
+        }
+      } catch (error) {
+        console.error('Failed to fetch integration ID:', error)
+      }
+    }
+    fetchIntegrationId()
+  }, [currentLocation?.id])
+
+  // Use real data if available, otherwise fall back to mock
+  const dailyData = hasRealData ? realData : mockDailyData
 
   // Calculate MTD totals
   const mtdTotals = useMemo(() => {
@@ -178,9 +369,10 @@ export default function SalesDataPage() {
         alcoholSales: acc.alcoholSales + day.alcoholSales,
         beerSales: acc.beerSales + day.beerSales,
         wineSales: acc.wineSales + day.wineSales,
+        orderCount: acc.orderCount + (day.orderCount || 0),
         syncedDays: acc.syncedDays + (day.status !== 'error' ? 1 : 0),
       }),
-      { totalSales: 0, foodSales: 0, alcoholSales: 0, beerSales: 0, wineSales: 0, syncedDays: 0 }
+      { totalSales: 0, foodSales: 0, alcoholSales: 0, beerSales: 0, wineSales: 0, orderCount: 0, syncedDays: 0 }
     )
   }, [dailyData])
 
@@ -219,13 +411,98 @@ export default function SalesDataPage() {
     setSelectedRows(new Set())
   }
 
-  const handleResyncMonth = async () => {
-    setIsResyncing(true)
-    await new Promise(resolve => setTimeout(resolve, 2000))
-    setIsResyncing(false)
+  const handleResyncMonth = useCallback(async () => {
+    if (!integrationId) {
+      toast.error('No Toast integration found. Please connect Toast first.')
+      return
+    }
 
-    toast.success('Sync triggered for January 2025')
-  }
+    setIsResyncing(true)
+    setSyncProgress({
+      phase: 'connecting',
+      message: 'Starting sync...',
+      ordersProcessed: 0,
+      totalDays: 0,
+      currentDay: 0,
+      percentComplete: 0,
+    })
+
+    abortControllerRef.current = new AbortController()
+
+    try {
+      // Calculate date range for current period
+      const [year, month] = currentPeriod.split('-').map(Number)
+      const startDate = startOfMonth(new Date(year, month - 1))
+      const endDate = endOfMonth(new Date(year, month - 1))
+
+      const params = new URLSearchParams({
+        integrationId,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+      })
+
+      const response = await fetch(`/api/integrations/toast/sync/stream?${params}`, {
+        signal: abortControllerRef.current.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        throw new Error('No response body')
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        // Parse SSE events
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6)) as SyncProgress
+              setSyncProgress(data)
+
+              if (data.phase === 'complete') {
+                toast.success(`Sync complete! Imported ${data.ordersProcessed} orders for ${format(startDate, 'MMMM yyyy')}`)
+                // Refetch data after short delay
+                setTimeout(() => {
+                  setSyncProgress(null)
+                  setIsResyncing(false)
+                  setRefreshKey(prev => prev + 1) // Trigger data refetch
+                }, 1500)
+              } else if (data.phase === 'error') {
+                toast.error(data.error || 'Sync failed')
+                setSyncProgress(null)
+                setIsResyncing(false)
+              }
+            } catch {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        toast.info('Sync cancelled')
+      } else {
+        console.error('Sync error:', error)
+        toast.error(error instanceof Error ? error.message : 'Sync failed')
+      }
+      setSyncProgress(null)
+      setIsResyncing(false)
+    }
+  }, [integrationId, currentPeriod])
 
   const handleResyncRow = async (id: string, date: string) => {
     toast.success(`Sync triggered for ${formatDate(date)}`)
@@ -288,11 +565,21 @@ export default function SalesDataPage() {
         </Select>
 
         <div className="ml-auto text-sm text-muted-foreground">
-          Last synced: Jan 25, 2025 6:00 AM from Toast
+          {hasRealData ? (
+            <span className="text-green-600 font-medium">Live data from Toast</span>
+          ) : (
+            'Sample data (connect Toast to see live data)'
+          )}
         </div>
       </div>
 
       {/* Data Table */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <span className="ml-2 text-muted-foreground">Loading sales data...</span>
+        </div>
+      ) : (
       <div className="rounded-md border">
         <Table>
           <TableHeader>
@@ -310,100 +597,174 @@ export default function SalesDataPage() {
               <TableHead>Alcohol</TableHead>
               <TableHead>Beer</TableHead>
               <TableHead>Wine</TableHead>
+              <TableHead>Orders</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[50px]"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {dailyData.map((day) => (
-              <TableRow
-                key={day.id}
-                data-state={selectedRows.has(day.id) ? 'selected' : undefined}
-                className="group"
-              >
-                <TableCell>
-                  <Checkbox
-                    checked={selectedRows.has(day.id)}
-                    onCheckedChange={() => toggleRow(day.id)}
-                    aria-label={`Select ${day.date}`}
-                  />
-                </TableCell>
-                <TableCell className="font-medium">
-                  {formatDate(day.date)}
-                </TableCell>
-                <TableCell className="tabular-nums">
-                  {day.status === 'error' ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    <>
-                      {formatCurrency(day.totalSales)}
-                      {day.status === 'manual' && (
-                        <span className="ml-1 text-health-warning" title={day.manualReason}>*</span>
+            {dailyData.map((day) => {
+              const hasDayparts = day.dayparts && day.dayparts.length > 0
+              const isExpanded = expandedRows.has(day.id)
+
+              return (
+                <Fragment key={day.id}>
+                  <TableRow
+                    data-state={selectedRows.has(day.id) ? 'selected' : undefined}
+                    className="group"
+                  >
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {hasDayparts && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 p-0"
+                            onClick={() => toggleExpanded(day.id)}
+                          >
+                            {isExpanded ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </Button>
+                        )}
+                        <Checkbox
+                          checked={selectedRows.has(day.id)}
+                          onCheckedChange={() => toggleRow(day.id)}
+                          aria-label={`Select ${day.date}`}
+                        />
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-medium">
+                      {formatDate(day.date)}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {day.status === 'error' ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <>
+                          {formatCurrency(day.totalSales)}
+                          {day.status === 'manual' && (
+                            <span className="ml-1 text-health-warning" title={day.manualReason}>*</span>
+                          )}
+                        </>
                       )}
-                    </>
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {day.status === 'error' ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        formatCurrency(day.foodSales)
+                      )}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {day.status === 'error' ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        formatCurrency(day.alcoholSales)
+                      )}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {day.status === 'error' ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        formatCurrency(day.beerSales)
+                      )}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {day.status === 'error' ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        formatCurrency(day.wineSales)
+                      )}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {day.status === 'error' ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        day.orderCount?.toLocaleString() || '—'
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <StatusBadge status={day.status} />
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 opacity-0 group-hover:opacity-100"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                            <span className="sr-only">Actions</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleResyncRow(day.id, day.date)}>
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Re-sync this day
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleEditRow(day.id)}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit values
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleViewHistory(day.id)}>
+                            <History className="mr-2 h-4 w-4" />
+                            View history
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                  {/* Expanded daypart details row */}
+                  {hasDayparts && isExpanded && (
+                    <TableRow key={`${day.id}-dayparts`} className="bg-muted/30 hover:bg-muted/40">
+                      <TableCell colSpan={10} className="py-3">
+                        <div className="ml-8 space-y-2">
+                          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                            Daypart Breakdown
+                          </div>
+                          <div className="grid gap-2">
+                            {day.dayparts!.map((dp) => (
+                              <div
+                                key={dp.id}
+                                className="flex items-center gap-6 rounded-md bg-background/60 px-4 py-2 text-sm"
+                              >
+                                <div className="w-24 font-medium text-foreground">
+                                  {formatDaypart(dp.daypart)}
+                                </div>
+                                <div className="flex items-center gap-1.5 min-w-[100px]">
+                                  <span className="text-muted-foreground">Total:</span>
+                                  <span className="tabular-nums font-medium">{formatCurrency(dp.totalSales)}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 min-w-[90px]">
+                                  <UtensilsCrossed className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="tabular-nums">{formatCurrency(dp.foodSales)}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 min-w-[90px]">
+                                  <Wine className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="tabular-nums">{formatCurrency(dp.alcoholSales)}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 min-w-[70px]">
+                                  <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="tabular-nums">{dp.covers}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 min-w-[70px]">
+                                  <Receipt className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="tabular-nums">{dp.checkCount}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </TableCell>
+                    </TableRow>
                   )}
-                </TableCell>
-                <TableCell className="tabular-nums">
-                  {day.status === 'error' ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    formatCurrency(day.foodSales)
-                  )}
-                </TableCell>
-                <TableCell className="tabular-nums">
-                  {day.status === 'error' ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    formatCurrency(day.alcoholSales)
-                  )}
-                </TableCell>
-                <TableCell className="tabular-nums">
-                  {day.status === 'error' ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    formatCurrency(day.beerSales)
-                  )}
-                </TableCell>
-                <TableCell className="tabular-nums">
-                  {day.status === 'error' ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    formatCurrency(day.wineSales)
-                  )}
-                </TableCell>
-                <TableCell>
-                  <StatusBadge status={day.status} />
-                </TableCell>
-                <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 opacity-0 group-hover:opacity-100"
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                        <span className="sr-only">Actions</span>
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleResyncRow(day.id, day.date)}>
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Re-sync this day
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleEditRow(day.id)}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit values
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleViewHistory(day.id)}>
-                        <History className="mr-2 h-4 w-4" />
-                        View history
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
-            ))}
+                </Fragment>
+              )
+            })}
           </TableBody>
           <TableFooter>
             <TableRow>
@@ -424,6 +785,9 @@ export default function SalesDataPage() {
               <TableCell className="font-semibold tabular-nums">
                 {formatCurrency(mtdTotals.wineSales)}
               </TableCell>
+              <TableCell className="font-semibold tabular-nums">
+                {mtdTotals.orderCount.toLocaleString()}
+              </TableCell>
               <TableCell className="text-muted-foreground">
                 {mtdTotals.syncedDays}/{dailyData.length} days
               </TableCell>
@@ -432,36 +796,58 @@ export default function SalesDataPage() {
           </TableFooter>
         </Table>
       </div>
+      )}
 
       {/* Sticky Footer */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <div className="text-sm text-muted-foreground">
-            {selectedRows.size > 0 ? (
-              <span className="font-medium text-foreground">{selectedRows.size} selected</span>
-            ) : (
-              <span>No rows selected</span>
-            )}
-          </div>
+      <div className="fixed bottom-0 left-0 md:left-64 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="mx-auto max-w-7xl px-6 py-4">
+          {/* Sync Progress */}
+          {syncProgress && syncProgress.phase !== 'complete' && syncProgress.phase !== 'error' && (
+            <div className="mb-4 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">{syncProgress.message}</span>
+                <span className="font-medium tabular-nums">{syncProgress.percentComplete}%</span>
+              </div>
+              <Progress value={syncProgress.percentComplete} className="h-2" />
+              {syncProgress.ordersProcessed > 0 && (
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <span>{syncProgress.ordersProcessed.toLocaleString()} orders processed</span>
+                  {syncProgress.totalDays > 0 && (
+                    <span>{syncProgress.currentDay}/{syncProgress.totalDays} days</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              onClick={handleResyncSelected}
-              disabled={selectedRows.size === 0 || isResyncing}
-              className="gap-2"
-            >
-              <RefreshCw className={`h-4 w-4 ${isResyncing ? 'animate-spin' : ''}`} />
-              Re-sync Selected
-            </Button>
-            <Button
-              onClick={handleResyncMonth}
-              disabled={isResyncing}
-              className="gap-2"
-            >
-              <RefreshCw className={`h-4 w-4 ${isResyncing ? 'animate-spin' : ''}`} />
-              Re-sync Month
-            </Button>
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-muted-foreground">
+              {selectedRows.size > 0 ? (
+                <span className="font-medium text-foreground">{selectedRows.size} selected</span>
+              ) : (
+                <span>No rows selected</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={handleResyncSelected}
+                disabled={selectedRows.size === 0 || isResyncing}
+                className="gap-2"
+              >
+                <RefreshCw className={`h-4 w-4 ${isResyncing ? 'animate-spin' : ''}`} />
+                Re-sync Selected
+              </Button>
+              <Button
+                onClick={handleResyncMonth}
+                disabled={isResyncing || !integrationId}
+                className="gap-2"
+              >
+                <RefreshCw className={`h-4 w-4 ${isResyncing ? 'animate-spin' : ''}`} />
+                Re-sync Month
+              </Button>
+            </div>
           </div>
         </div>
       </div>

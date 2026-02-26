@@ -430,7 +430,7 @@ export default function CostsDataPage() {
       </div>
 
       {/* Sticky Footer */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="fixed bottom-0 left-0 md:left-64 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <div className="text-sm text-muted-foreground">
             {selectedRows.size > 0 ? (

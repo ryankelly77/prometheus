@@ -188,9 +188,22 @@ export abstract class BaseApiClient {
           };
         }
 
+        // Capture all headers for debugging
+        const headersObj: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          headersObj[key.toLowerCase()] = value;
+        });
+
+        // Log raw response for debugging pagination
+        if (endpoint.includes('ordersBulk')) {
+          console.log(`[BaseClient] Raw response for ordersBulk (first 1000 chars):`, responseText.substring(0, 1000));
+          console.log(`[BaseClient] Response headers:`, headersObj);
+        }
+
         return {
           success: true,
           data: responseData,
+          headers: headersObj,
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));

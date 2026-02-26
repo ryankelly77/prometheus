@@ -31,6 +31,7 @@ export interface Integration {
   logoUrl: string
   requiresPro?: boolean
   poweredBy?: string
+  connectedLocationName?: string
 }
 
 export type IntegrationType =

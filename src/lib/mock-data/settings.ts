@@ -80,6 +80,7 @@ export const mockIntegrations: Integration[] = [
     status: 'connected',
     lastSyncAt: '2025-01-26T06:00:00Z',
     logoUrl: '/integrations/toast.svg',
+    connectedLocationName: 'Southerleigh Fine Food & Brewery',
   },
   {
     id: 'int-2',

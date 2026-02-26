@@ -76,6 +76,7 @@ interface UserIntegrationCardProps {
   onReconnect: (integration: Integration) => void
   onDisconnect: (integration: Integration) => void
   onViewData: (integration: Integration) => void
+  onAddConnection?: (integration: Integration) => void
 }
 
 export function UserIntegrationCard({
@@ -84,6 +85,7 @@ export function UserIntegrationCard({
   onReconnect,
   onDisconnect,
   onViewData,
+  onAddConnection,
 }: UserIntegrationCardProps) {
   const statusConfig = {
     connected: {
@@ -125,6 +127,11 @@ export function UserIntegrationCard({
                 </span>
               </div>
               <p className="text-sm text-muted-foreground">{integration.description}</p>
+              {integration.status === 'connected' && integration.connectedLocationName && (
+                <p className="text-xs text-muted-foreground">
+                  Connected to <span className="font-medium">{integration.connectedLocationName}</span>
+                </p>
+              )}
               {integration.status === 'connected' && integration.lastSyncAt && (
                 <p className="text-xs text-muted-foreground">
                   Last sync: {formatDistanceToNow(new Date(integration.lastSyncAt), { addSuffix: true })}
@@ -144,9 +151,14 @@ export function UserIntegrationCard({
                 <Button variant="outline" size="sm" onClick={() => onViewData(integration)}>
                   View Data
                 </Button>
+                {onAddConnection && (
+                  <Button variant="outline" size="sm" onClick={() => onAddConnection(integration)}>
+                    Add Connection
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={() => onReconnect(integration)}>
                   <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                  Reconnect
+                  Sync
                 </Button>
                 <Button
                   variant="ghost"

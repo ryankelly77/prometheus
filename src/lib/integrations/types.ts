@@ -25,6 +25,7 @@ export interface ApiResponse<T> {
     hasMore?: boolean;
     nextLink?: string;
   };
+  headers?: Record<string, string>;
 }
 
 /**
