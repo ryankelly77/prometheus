@@ -576,19 +576,32 @@ export default function SalesDataPage() {
         </Select>
 
         <div className="ml-auto flex items-center gap-4 text-sm text-muted-foreground">
-          {hasRealData && monthLastSyncAt && (
-            <span>
-              Last synced: {format(new Date(monthLastSyncAt), 'MMM d, yyyy')} at{' '}
-              {format(new Date(monthLastSyncAt), 'h:mm a')}
-            </span>
-          )}
-          {hasRealData && !monthLastSyncAt && (
-            <span className="text-amber-600">Not yet synced for this period</span>
-          )}
           {hasRealData ? (
-            <span className="text-green-600 font-medium">Live data from Toast</span>
+            <>
+              {monthLastSyncAt && (
+                <span>
+                  Last synced: {format(new Date(monthLastSyncAt), 'MMM d, yyyy')} at{' '}
+                  {format(new Date(monthLastSyncAt), 'h:mm a')}
+                </span>
+              )}
+              <span className="text-green-600 font-medium">Live data from Toast</span>
+            </>
+          ) : integrationId ? (
+            <>
+              <span className="text-amber-600">No data for this period</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleResyncMonth}
+                disabled={isResyncing}
+                className="gap-1.5"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${isResyncing ? 'animate-spin' : ''}`} />
+                Sync Now
+              </Button>
+            </>
           ) : (
-            'Sample data (connect Toast to see live data)'
+            <span>Sample data — <a href="/dashboard/settings?tab=integrations" className="text-primary hover:underline">Connect Toast</a> to see live data</span>
           )}
         </div>
       </div>
