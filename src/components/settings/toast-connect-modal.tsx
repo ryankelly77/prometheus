@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
 import {
   Dialog,
@@ -35,10 +36,10 @@ export function ToastConnectModal({
   onSuccess,
 }: ToastConnectModalProps) {
   const { toast } = useToast()
+  const router = useRouter()
   const { locations } = useLocation()
   const [isLoading, setIsLoading] = useState(false)
-  const [step, setStep] = useState<'credentials' | 'syncing' | 'success'>('credentials')
-  const [syncStatus, setSyncStatus] = useState('')
+  const [step, setStep] = useState<'credentials' | 'connected'>('credentials')
   const [result, setResult] = useState<{
     integrationId: string
     restaurant: {
@@ -46,7 +47,6 @@ export function ToastConnectModal({
       address: string
       city: string
     }
-    ordersProcessed?: number
   } | null>(null)
 
   // Form state
@@ -87,46 +87,16 @@ export function ToastConnectModal({
         throw new Error(data.error || 'Failed to connect')
       }
 
-      // Show syncing step
-      setStep('syncing')
-      setSyncStatus('Connected! Now syncing your data...')
-
-      // Trigger initial sync - fetch last 30 days of data
-      let ordersProcessed = 0
-      try {
-        setSyncStatus('Fetching orders from Toast (last 30 days)...')
-        const endDate = new Date()
-        const startDate = new Date()
-        startDate.setDate(startDate.getDate() - 30)
-
-        const syncResponse = await fetch('/api/integrations/toast/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            integrationId: data.integrationId,
-            startDate: startDate.toISOString(),
-            endDate: endDate.toISOString(),
-          }),
-        })
-        const syncData = await syncResponse.json()
-        ordersProcessed = syncData.ordersProcessed || 0
-        setSyncStatus(`Synced ${ordersProcessed} orders`)
-      } catch (syncError) {
-        console.error('Initial sync error:', syncError)
-        setSyncStatus('Connected (sync will retry automatically)')
-      }
-
       setResult({
         integrationId: data.integrationId,
         restaurant: data.restaurant,
-        ordersProcessed,
       })
-      setStep('success')
+      setStep('connected')
 
       const connectedLocation = locations.find((loc) => loc.id === locationId)
       toast({
         title: 'Connected!',
-        description: `Successfully connected and synced ${ordersProcessed} orders`,
+        description: `Successfully connected to ${data.restaurant.name}`,
       })
 
       onSuccess?.(data.integrationId, connectedLocation?.name ?? '')
@@ -141,13 +111,20 @@ export function ToastConnectModal({
     }
   }
 
+  const handleStartBackfill = () => {
+    if (result?.integrationId) {
+      // Close modal and redirect to sync status page
+      onOpenChange(false)
+      router.push(`/dashboard/integrations/toast/sync-status?integrationId=${result.integrationId}&autoStart=true`)
+    }
+  }
+
   const handleClose = () => {
     onOpenChange(false)
     // Reset form after close animation
     setTimeout(() => {
       setStep('credentials')
       setResult(null)
-      setSyncStatus('')
       setClientSecret('')
       setRestaurantGuid('')
       setLocationId('')
@@ -238,28 +215,7 @@ export function ToastConnectModal({
           </>
         )}
 
-        {step === 'syncing' && (
-          <>
-            <DialogHeader>
-              <DialogTitle>Syncing Data</DialogTitle>
-            </DialogHeader>
-
-            <div className="py-8 flex flex-col items-center justify-center space-y-4">
-              <div className="relative">
-                <div className="h-16 w-16 rounded-full border-4 border-muted" />
-                <div className="absolute inset-0 h-16 w-16 rounded-full border-4 border-primary border-t-transparent animate-spin" />
-              </div>
-              <p className="text-sm text-muted-foreground text-center">
-                {syncStatus}
-              </p>
-              <p className="text-xs text-muted-foreground text-center">
-                This may take a few moments...
-              </p>
-            </div>
-          </>
-        )}
-
-        {step === 'success' && result && (
+        {step === 'connected' && result && (
           <>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-green-600">
@@ -298,21 +254,23 @@ export function ToastConnectModal({
                   {locations.find((loc) => loc.id === locationId)?.name ?? 'Unknown'}
                 </p>
               </div>
-              {result.ordersProcessed !== undefined && result.ordersProcessed > 0 && (
-                <div className="rounded-lg bg-green-50 dark:bg-green-950/20 p-4 border border-green-200 dark:border-green-900">
-                  <p className="text-sm text-green-700 dark:text-green-400 font-medium">
-                    ✓ Synced {result.ordersProcessed} orders
-                  </p>
-                </div>
-              )}
-              <p className="text-sm text-muted-foreground">
-                Toast is now connected and will sync automatically. You can trigger
-                a manual sync from the integration settings.
-              </p>
+              <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 p-4 border border-blue-200 dark:border-blue-900">
+                <p className="text-sm text-blue-700 dark:text-blue-400 font-medium">
+                  Ready to sync 12 months of historical data
+                </p>
+                <p className="text-xs text-blue-600 dark:text-blue-400/80 mt-1">
+                  This will import all your sales data from the past year
+                </p>
+              </div>
             </div>
 
-            <DialogFooter>
-              <Button onClick={handleClose}>Done</Button>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={handleClose}>
+                Skip for now
+              </Button>
+              <Button onClick={handleStartBackfill}>
+                Start 12-Month Sync
+              </Button>
             </DialogFooter>
           </>
         )}
