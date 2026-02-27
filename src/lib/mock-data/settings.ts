@@ -69,7 +69,7 @@ export const mockLocations: Location[] = [
 export const mockIntegrations: Integration[] = [
   // === USER CONNECTS ===
 
-  // POS
+  // POS - Toast status is fetched from API, start as available
   {
     id: 'int-1',
     type: 'toast',
@@ -77,10 +77,8 @@ export const mockIntegrations: Integration[] = [
     description: 'Sales, labor, menu data',
     category: 'pos',
     connectionType: 'user',
-    status: 'connected',
-    lastSyncAt: '2025-01-26T06:00:00Z',
+    status: 'available',
     logoUrl: '/integrations/toast.svg',
-    connectedLocationName: 'Southerleigh Fine Food & Brewery',
   },
   {
     id: 'int-2',

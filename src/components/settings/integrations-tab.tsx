@@ -55,7 +55,7 @@ const MANAGED_CATEGORY_CONFIG: Record<
 
 export function IntegrationsTab() {
   const { toast } = useToast()
-  const { currentLocation } = useLocation()
+  const { currentLocation, locations } = useLocation()
   const [integrations, setIntegrations] = useState<Integration[]>(mockIntegrations)
   const [socialPreference, setSocialPreference] = useState<SocialMediaPreference>(mockSocialPreference)
   const [comingSoonModal, setComingSoonModal] = useState(false)
@@ -65,54 +65,16 @@ export function IntegrationsTab() {
   const [toastSyncIntegrationId, setToastSyncIntegrationId] = useState<string | null>(null)
   const [toastSyncLocationName, setToastSyncLocationName] = useState<string | undefined>(undefined)
 
-  // Fetch real integration status for the current location
+  // Fetch real integration status for the current location (or first location if none selected)
   useEffect(() => {
     async function fetchRealIntegrationStatus() {
-      // Use currentLocation if set, otherwise try to fetch for all locations
-      const locationId = currentLocation?.id
-
-      if (!locationId) {
-        // If no specific location selected, try to fetch locations and use first one
-        try {
-          const locResponse = await fetch('/api/locations')
-          const locData = await locResponse.json()
-          if (locData.locations && locData.locations.length > 0) {
-            const firstLocationId = locData.locations[0].id
-            const firstLocationName = locData.locations[0].name
-
-            // Fetch Toast status for first location
-            const toastResponse = await fetch(`/api/integrations/toast/status?locationId=${firstLocationId}`)
-            const toastData = await toastResponse.json()
-
-            if (toastData.success) {
-              setIntegrations((prev) =>
-                prev.map((i) =>
-                  i.type === 'toast'
-                    ? {
-                        ...i,
-                        status: toastData.isConnected ? 'connected' : 'available',
-                        lastSyncAt: toastData.lastSyncAt ?? undefined,
-                        connectedLocationName: toastData.restaurantName ?? firstLocationName,
-                      }
-                    : i
-                )
-              )
-
-              if (toastData.integrationId) {
-                setToastSyncIntegrationId(toastData.integrationId)
-                setToastSyncLocationName(toastData.restaurantName ?? firstLocationName)
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Failed to fetch locations:', error)
-        }
-        return
-      }
+      // Use currentLocation if set, otherwise use first location from context
+      const locationToUse = currentLocation ?? locations[0]
+      if (!locationToUse?.id) return
 
       try {
         // Fetch Toast integration status
-        const toastResponse = await fetch(`/api/integrations/toast/status?locationId=${locationId}`)
+        const toastResponse = await fetch(`/api/integrations/toast/status?locationId=${locationToUse.id}`)
         const toastData = await toastResponse.json()
 
         if (toastData.success) {
@@ -123,7 +85,7 @@ export function IntegrationsTab() {
                     ...i,
                     status: toastData.isConnected ? 'connected' : 'available',
                     lastSyncAt: toastData.lastSyncAt ?? undefined,
-                    connectedLocationName: toastData.restaurantName ?? currentLocation.name,
+                    connectedLocationName: toastData.restaurantName ?? locationToUse.name,
                   }
                 : i
             )
@@ -132,7 +94,7 @@ export function IntegrationsTab() {
           // Store the real integration ID for sync operations
           if (toastData.integrationId) {
             setToastSyncIntegrationId(toastData.integrationId)
-            setToastSyncLocationName(toastData.restaurantName ?? currentLocation.name)
+            setToastSyncLocationName(toastData.restaurantName ?? locationToUse.name)
           }
         }
       } catch (error) {
@@ -141,7 +103,7 @@ export function IntegrationsTab() {
     }
 
     fetchRealIntegrationStatus()
-  }, [currentLocation?.id, currentLocation?.name])
+  }, [currentLocation, locations])
 
   // Filter integrations by connection type
   const userIntegrations = integrations.filter((i) => i.connectionType === 'user')
