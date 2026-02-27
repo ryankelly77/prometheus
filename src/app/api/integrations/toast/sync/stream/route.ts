@@ -1,5 +1,8 @@
 import { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth/require-role";
+
+// Increase timeout for Vercel Pro (5 minutes max)
+export const maxDuration = 300;
 import prisma from "@/lib/prisma";
 import { createToastClient } from "@/lib/integrations/toast/client";
 import { getToastConfig } from "@/lib/integrations/toast/auth";

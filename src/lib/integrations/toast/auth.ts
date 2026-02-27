@@ -16,14 +16,8 @@ import type {
 const TOAST_API_URL = process.env.TOAST_API_URL ?? "https://ws-api.toasttab.com";
 const TOAST_AUTH_URL = `${TOAST_API_URL}/authentication/v1/authentication/login`;
 
-// In-memory token cache
-const tokenCache = new Map<
-  string,
-  {
-    accessToken: string;
-    expiresAt: Date;
-  }
->();
+// Token cache - uses database for persistence across serverless invocations
+// This is critical because Toast limits token requests to 2 per hour
 
 /**
  * Authenticate with Toast API using client credentials
@@ -159,9 +153,6 @@ export async function storeToastCredentials(
       apiSecret: encryptedClientSecret,
     },
   });
-
-  // Clear cached token
-  tokenCache.delete(integrationId);
 }
 
 /**
@@ -197,14 +188,27 @@ export async function getToastCredentials(
 
 /**
  * Get a valid bearer token for Toast API calls
+ * Uses database-backed caching to persist across serverless invocations
+ * Critical: Toast limits token requests to 2 per hour
  */
 export async function getToastBearerToken(integrationId: string): Promise<string> {
-  // Check cache first
-  const cached = tokenCache.get(integrationId);
-  if (cached && cached.expiresAt > new Date(Date.now() + 60000)) {
-    // Token valid for at least 1 more minute
-    return cached.accessToken;
+  // Check database cache first
+  const integration = await prisma.integration.findUnique({
+    where: { id: integrationId },
+    select: { accessToken: true, tokenExpiresAt: true },
+  });
+
+  // If we have a cached token that's valid for at least 5 more minutes, use it
+  if (
+    integration?.accessToken &&
+    integration?.tokenExpiresAt &&
+    new Date(integration.tokenExpiresAt) > new Date(Date.now() + 5 * 60 * 1000)
+  ) {
+    console.log("[Toast Auth] Using cached token from database");
+    return integration.accessToken;
   }
+
+  console.log("[Toast Auth] Token expired or missing, authenticating...");
 
   // Get credentials and authenticate
   const credentials = await getToastCredentials(integrationId);
@@ -217,12 +221,16 @@ export async function getToastBearerToken(integrationId: string): Promise<string
     throw new Error(authResult.error ?? "Toast authentication failed");
   }
 
-  // Cache the token
-  tokenCache.set(integrationId, {
-    accessToken: authResult.accessToken,
-    expiresAt: authResult.expiresAt!,
+  // Store the token in database for persistence across invocations
+  await prisma.integration.update({
+    where: { id: integrationId },
+    data: {
+      accessToken: authResult.accessToken,
+      tokenExpiresAt: authResult.expiresAt,
+    },
   });
 
+  console.log("[Toast Auth] New token cached in database, expires:", authResult.expiresAt);
   return authResult.accessToken;
 }
 
@@ -271,9 +279,6 @@ export async function updateToastConfig(
  * Revoke Toast credentials (disconnect)
  */
 export async function revokeToastCredentials(integrationId: string): Promise<void> {
-  // Clear cached token
-  tokenCache.delete(integrationId);
-
   // Update integration status and clear credentials
   await prisma.integration.update({
     where: { id: integrationId },
@@ -282,6 +287,7 @@ export async function revokeToastCredentials(integrationId: string): Promise<voi
       apiKey: null,
       apiSecret: null,
       accessToken: null,
+      tokenExpiresAt: null,
     },
   });
 }
