@@ -348,12 +348,29 @@ export default function SalesDataPage() {
     }
   }
 
-  // Fetch integration ID for current location
+  // Fetch integration ID for current location (or first location if "All" selected)
   useEffect(() => {
     async function fetchIntegrationStatus() {
-      if (!currentLocation?.id) return
+      let locationId = currentLocation?.id
+
+      // If no specific location selected, try to get the first location
+      if (!locationId) {
+        try {
+          const locResponse = await fetch('/api/locations')
+          const locData = await locResponse.json()
+          if (locData.locations && locData.locations.length > 0) {
+            locationId = locData.locations[0].id
+          }
+        } catch (error) {
+          console.error('Failed to fetch locations:', error)
+          return
+        }
+      }
+
+      if (!locationId) return
+
       try {
-        const response = await fetch(`/api/integrations/toast/status?locationId=${currentLocation.id}`)
+        const response = await fetch(`/api/integrations/toast/status?locationId=${locationId}`)
         const data = await response.json()
         if (data.integrationId) {
           setIntegrationId(data.integrationId)

@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Star } from 'lucide-react'
+import { useLocation } from '@/hooks/use-location'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
@@ -54,6 +55,7 @@ const MANAGED_CATEGORY_CONFIG: Record<
 
 export function IntegrationsTab() {
   const { toast } = useToast()
+  const { currentLocation } = useLocation()
   const [integrations, setIntegrations] = useState<Integration[]>(mockIntegrations)
   const [socialPreference, setSocialPreference] = useState<SocialMediaPreference>(mockSocialPreference)
   const [comingSoonModal, setComingSoonModal] = useState(false)
@@ -62,6 +64,84 @@ export function IntegrationsTab() {
   const [toastSyncModalOpen, setToastSyncModalOpen] = useState(false)
   const [toastSyncIntegrationId, setToastSyncIntegrationId] = useState<string | null>(null)
   const [toastSyncLocationName, setToastSyncLocationName] = useState<string | undefined>(undefined)
+
+  // Fetch real integration status for the current location
+  useEffect(() => {
+    async function fetchRealIntegrationStatus() {
+      // Use currentLocation if set, otherwise try to fetch for all locations
+      const locationId = currentLocation?.id
+
+      if (!locationId) {
+        // If no specific location selected, try to fetch locations and use first one
+        try {
+          const locResponse = await fetch('/api/locations')
+          const locData = await locResponse.json()
+          if (locData.locations && locData.locations.length > 0) {
+            const firstLocationId = locData.locations[0].id
+            const firstLocationName = locData.locations[0].name
+
+            // Fetch Toast status for first location
+            const toastResponse = await fetch(`/api/integrations/toast/status?locationId=${firstLocationId}`)
+            const toastData = await toastResponse.json()
+
+            if (toastData.success) {
+              setIntegrations((prev) =>
+                prev.map((i) =>
+                  i.type === 'toast'
+                    ? {
+                        ...i,
+                        status: toastData.isConnected ? 'connected' : 'available',
+                        lastSyncAt: toastData.lastSyncAt ?? undefined,
+                        connectedLocationName: toastData.restaurantName ?? firstLocationName,
+                      }
+                    : i
+                )
+              )
+
+              if (toastData.integrationId) {
+                setToastSyncIntegrationId(toastData.integrationId)
+                setToastSyncLocationName(toastData.restaurantName ?? firstLocationName)
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Failed to fetch locations:', error)
+        }
+        return
+      }
+
+      try {
+        // Fetch Toast integration status
+        const toastResponse = await fetch(`/api/integrations/toast/status?locationId=${locationId}`)
+        const toastData = await toastResponse.json()
+
+        if (toastData.success) {
+          setIntegrations((prev) =>
+            prev.map((i) =>
+              i.type === 'toast'
+                ? {
+                    ...i,
+                    status: toastData.isConnected ? 'connected' : 'available',
+                    lastSyncAt: toastData.lastSyncAt ?? undefined,
+                    connectedLocationName: toastData.restaurantName ?? currentLocation.name,
+                  }
+                : i
+            )
+          )
+
+          // Store the real integration ID for sync operations
+          if (toastData.integrationId) {
+            setToastSyncIntegrationId(toastData.integrationId)
+            setToastSyncLocationName(toastData.restaurantName ?? currentLocation.name)
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch integration status:', error)
+      }
+    }
+
+    fetchRealIntegrationStatus()
+  }, [currentLocation?.id, currentLocation?.name])
 
   // Filter integrations by connection type
   const userIntegrations = integrations.filter((i) => i.connectionType === 'user')
@@ -121,26 +201,14 @@ export function IntegrationsTab() {
   const handleReconnect = async (integration: Integration) => {
     // For Toast, open the sync modal with date range picker
     if (integration.type === 'toast') {
-      try {
-        // Get the integration ID from the database
-        const statusResponse = await fetch(`/api/integrations/toast/status?locationId=${integration.id}`)
-        const statusData = await statusResponse.json()
-
-        if (statusData.integrationId) {
-          setToastSyncIntegrationId(statusData.integrationId)
-          setToastSyncLocationName(integration.connectedLocationName)
-          setToastSyncModalOpen(true)
-        } else {
-          toast({
-            title: 'Not Connected',
-            description: 'Please connect Toast first before syncing.',
-            variant: 'destructive',
-          })
-        }
-      } catch (error) {
+      // Use the pre-fetched integration ID
+      if (toastSyncIntegrationId) {
+        setToastSyncLocationName(integration.connectedLocationName)
+        setToastSyncModalOpen(true)
+      } else {
         toast({
-          title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to get integration status',
+          title: 'Not Connected',
+          description: 'Please connect Toast first before syncing.',
           variant: 'destructive',
         })
       }
