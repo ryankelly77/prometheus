@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
         avgTip: Number(tx.avgTip),
         transactionCount: Number(tx.transactionCount) || 0,
         status: "synced" as const,
-        syncedAt: tx.createdAt?.toISOString(),
+        syncedAt: tx.syncedAt?.toISOString(),
       };
     });
 

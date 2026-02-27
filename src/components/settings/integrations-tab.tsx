@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { Star } from 'lucide-react'
 import { useLocation } from '@/hooks/use-location'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -55,6 +56,7 @@ const MANAGED_CATEGORY_CONFIG: Record<
 
 export function IntegrationsTab() {
   const { toast } = useToast()
+  const router = useRouter()
   const { currentLocation, locations } = useLocation()
   const [integrations, setIntegrations] = useState<Integration[]>(mockIntegrations)
   const [socialPreference, setSocialPreference] = useState<SocialMediaPreference>(mockSocialPreference)
@@ -161,12 +163,10 @@ export function IntegrationsTab() {
   }
 
   const handleReconnect = async (integration: Integration) => {
-    // For Toast, open the sync modal with date range picker
+    // For Toast, navigate to the sync status page
     if (integration.type === 'toast') {
-      // Use the pre-fetched integration ID
       if (toastSyncIntegrationId) {
-        setToastSyncLocationName(integration.connectedLocationName)
-        setToastSyncModalOpen(true)
+        router.push(`/dashboard/integrations/toast/sync-status?integrationId=${toastSyncIntegrationId}`)
       } else {
         toast({
           title: 'Not Connected',
