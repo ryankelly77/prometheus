@@ -130,11 +130,14 @@ export function UserIntegrationCard({
               {integration.status === 'connected' && integration.connectedLocationName && (
                 <p className="text-xs text-muted-foreground">
                   Connected to <span className="font-medium">{integration.connectedLocationName}</span>
+                  {integration.lastSyncAt && (
+                    <span> · Last activity {formatDistanceToNow(new Date(integration.lastSyncAt), { addSuffix: true })}</span>
+                  )}
                 </p>
               )}
-              {integration.status === 'connected' && integration.lastSyncAt && (
+              {integration.status === 'connected' && !integration.connectedLocationName && integration.lastSyncAt && (
                 <p className="text-xs text-muted-foreground">
-                  Last sync: {formatDistanceToNow(new Date(integration.lastSyncAt), { addSuffix: true })}
+                  Last activity {formatDistanceToNow(new Date(integration.lastSyncAt), { addSuffix: true })}
                 </p>
               )}
               {integration.status === 'error' && integration.errorMessage && (

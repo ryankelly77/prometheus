@@ -32,6 +32,17 @@ interface SyncProgress {
   currentDay: number;
   percentComplete: number;
   error?: string;
+  // Fetching phase details
+  fetchingPage?: number;
+  ordersLoaded?: number;
+  // Summary data for complete phase
+  summary?: {
+    netSales: number;
+    orderCount: number;
+    periodStart: string;
+    periodEnd: string;
+    durationMs: number;
+  };
 }
 
 /**
@@ -121,17 +132,37 @@ export async function GET(request: NextRequest) {
         // Log requested date range
         console.log(`[Toast Sync] REQUESTED date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
 
-        // Phase 2: Fetching orders
+        // Track sync duration
+        const syncStartTime = Date.now();
+
+        // Phase 2: Fetching orders (with progress updates)
         sendProgress({
           phase: "fetching",
-          message: `Fetching orders from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}...`,
+          message: `Fetching orders from Toast...`,
           ordersProcessed: 0,
           totalDays,
           currentDay: 0,
           percentComplete: 10,
+          fetchingPage: 0,
+          ordersLoaded: 0,
         });
 
-        const rawOrders = await client.fetchAllOrders({ startDate, endDate });
+        const rawOrders = await client.fetchAllOrders({
+          startDate,
+          endDate,
+          onProgress: ({ page, ordersLoaded }) => {
+            sendProgress({
+              phase: "fetching",
+              message: `Fetching orders... page ${page} (${ordersLoaded.toLocaleString()} orders loaded)`,
+              ordersProcessed: 0,
+              totalDays,
+              currentDay: 0,
+              percentComplete: Math.min(10 + Math.floor(page * 2), 28), // Progress 10-28% during fetch
+              fetchingPage: page,
+              ordersLoaded,
+            });
+          },
+        });
         console.log(`[Toast Sync] Toast API returned ${rawOrders.length} orders`);
 
         // Filter orders to only include those within the requested date range
@@ -312,6 +343,9 @@ export async function GET(request: NextRequest) {
           console.log(`[Toast Sync]   ${dateStr}: ${record.transactionCount} orders, $${Number(record.netSales ?? 0).toFixed(2)} net`);
         }
 
+        // Set syncedAt timestamp for all records in this sync batch
+        const syncTimestamp = new Date();
+
         for (const record of transactionRecords) {
           const { locationId: locId, date, ...updateData } = record;
           const dateStr = date instanceof Date ? date.toISOString().slice(0, 10) : String(date).slice(0, 10);
@@ -323,11 +357,15 @@ export async function GET(request: NextRequest) {
                 date,
               },
             },
-            update: updateData,
+            update: {
+              ...updateData,
+              syncedAt: syncTimestamp,
+            },
             create: {
               location: { connect: { id: locId } },
               date,
               ...updateData,
+              syncedAt: syncTimestamp,
             },
           });
         }
@@ -435,6 +473,7 @@ export async function GET(request: NextRequest) {
         console.log(`[Toast Sync] ===========================================================\n`);
 
         // Phase 5: Complete
+        const syncDurationMs = Date.now() - syncStartTime;
         sendProgress({
           phase: "complete",
           message: `Sync complete! Imported ${orders.length} orders across ${totalUniqueDays} days`,
@@ -442,6 +481,13 @@ export async function GET(request: NextRequest) {
           totalDays: totalUniqueDays,
           currentDay: totalUniqueDays,
           percentComplete: 100,
+          summary: {
+            netSales: txNetSales,
+            orderCount: totalOrdersInDB,
+            periodStart: startDate.toISOString(),
+            periodEnd: endDate.toISOString(),
+            durationMs: syncDurationMs,
+          },
         });
 
         controller.close();

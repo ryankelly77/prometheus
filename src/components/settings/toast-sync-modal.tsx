@@ -35,6 +35,17 @@ interface SyncProgress {
   currentDay: number
   percentComplete: number
   error?: string
+  // Fetching phase details
+  fetchingPage?: number
+  ordersLoaded?: number
+  // Summary data for complete phase
+  summary?: {
+    netSales: number
+    orderCount: number
+    periodStart: string
+    periodEnd: string
+    durationMs: number
+  }
 }
 
 interface ToastSyncModalProps {
@@ -46,6 +57,28 @@ interface ToastSyncModalProps {
 }
 
 type PresetRange = '1month' | '3months' | '6months' | '12months' | 'custom'
+
+// Format duration in human-readable format
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return `${hours}h ${remainingMinutes}m`
+}
+
+// Format currency
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value)
+}
 
 export function ToastSyncModal({
   open,
@@ -59,6 +92,7 @@ export function ToastSyncModal({
   const [startDate, setStartDate] = useState<Date>(subMonths(new Date(), 3))
   const [endDate, setEndDate] = useState<Date>(new Date())
   const [progress, setProgress] = useState<SyncProgress | null>(null)
+  const [requestedDays, setRequestedDays] = useState<number>(0)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   // Reset state when modal opens
@@ -103,12 +137,16 @@ export function ToastSyncModal({
 
   // Start sync with SSE
   const startSync = useCallback(async () => {
+    // Calculate requested days for progress display
+    const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000))
+    setRequestedDays(days)
+
     setStep('syncing')
     setProgress({
       phase: 'connecting',
       message: 'Starting sync...',
       ordersProcessed: 0,
-      totalDays: 0,
+      totalDays: days,
       currentDay: 0,
       percentComplete: 0,
     })
@@ -343,10 +381,21 @@ export function ToastSyncModal({
             {/* Progress Ring / Icon */}
             <div className="flex justify-center">
               <div className="relative h-20 w-20">
-                <Loader2 className="h-20 w-20 animate-spin text-primary" />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-lg font-semibold">{progress.percentComplete}%</span>
-                </div>
+                {progress.phase === 'fetching' ? (
+                  // Pulsing animation for fetching phase
+                  <div className="h-20 w-20 rounded-full bg-primary/10 animate-pulse flex items-center justify-center">
+                    <div className="h-14 w-14 rounded-full bg-primary/20 animate-pulse flex items-center justify-center">
+                      <RefreshCw className="h-8 w-8 text-primary animate-spin" />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Loader2 className="h-20 w-20 animate-spin text-primary" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-lg font-semibold">{progress.percentComplete}%</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -357,20 +406,36 @@ export function ToastSyncModal({
             </div>
 
             {/* Progress Bar */}
-            <Progress value={progress.percentComplete} className="h-2" />
+            <Progress
+              value={progress.phase === 'fetching' ? undefined : progress.percentComplete}
+              className={cn("h-2", progress.phase === 'fetching' && "animate-pulse")}
+            />
 
-            {/* Stats */}
-            {progress.ordersProcessed > 0 && (
+            {/* Stats - different display for fetching vs processing */}
+            {progress.phase === 'fetching' && (progress.ordersLoaded ?? 0) > 0 && (
+              <div className="grid grid-cols-2 gap-4 text-center">
+                <div className="rounded-lg bg-muted p-3">
+                  <p className="text-2xl font-bold tabular-nums">{(progress.ordersLoaded ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">Orders Loaded</p>
+                </div>
+                <div className="rounded-lg bg-muted p-3">
+                  <p className="text-2xl font-bold tabular-nums">Page {progress.fetchingPage ?? 0}</p>
+                  <p className="text-xs text-muted-foreground">Fetching...</p>
+                </div>
+              </div>
+            )}
+
+            {progress.phase !== 'fetching' && progress.phase !== 'connecting' && (
               <div className="grid grid-cols-2 gap-4 text-center">
                 <div className="rounded-lg bg-muted p-3">
                   <p className="text-2xl font-bold tabular-nums">{progress.ordersProcessed.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground">Orders Processed</p>
+                  <p className="text-xs text-muted-foreground">Orders</p>
                 </div>
                 <div className="rounded-lg bg-muted p-3">
                   <p className="text-2xl font-bold tabular-nums">
-                    {progress.currentDay}/{progress.totalDays}
+                    {progress.currentDay}/{requestedDays || progress.totalDays}
                   </p>
-                  <p className="text-xs text-muted-foreground">Days Complete</p>
+                  <p className="text-xs text-muted-foreground">Days</p>
                 </div>
               </div>
             )}
@@ -395,22 +460,56 @@ export function ToastSyncModal({
 
             <div className="text-center">
               <p className="text-lg font-medium">Sync Complete!</p>
-              <p className="text-sm text-muted-foreground mt-1">{progress.message}</p>
+              {progress.summary && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  {format(new Date(progress.summary.periodStart), 'MMM d')} -{' '}
+                  {format(new Date(progress.summary.periodEnd), 'MMM d, yyyy')}
+                </p>
+              )}
             </div>
 
-            {/* Final Stats */}
-            <div className="grid grid-cols-2 gap-4 text-center">
-              <div className="rounded-lg bg-muted p-3">
-                <p className="text-2xl font-bold tabular-nums text-green-600">
-                  {progress.ordersProcessed.toLocaleString()}
-                </p>
-                <p className="text-xs text-muted-foreground">Orders Imported</p>
+            {/* Summary Stats */}
+            {progress.summary ? (
+              <div className="space-y-3">
+                {/* Net Sales - Big number */}
+                <div className="rounded-lg bg-green-50 dark:bg-green-900/20 p-4 text-center">
+                  <p className="text-3xl font-bold tabular-nums text-green-600 dark:text-green-400">
+                    {formatCurrency(progress.summary.netSales)}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">Net Sales</p>
+                </div>
+
+                {/* Orders and Duration */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-lg bg-muted p-3 text-center">
+                    <p className="text-2xl font-bold tabular-nums">
+                      {progress.summary.orderCount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Orders</p>
+                  </div>
+                  <div className="rounded-lg bg-muted p-3 text-center">
+                    <p className="text-2xl font-bold tabular-nums">
+                      {formatDuration(progress.summary.durationMs)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Duration</p>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-lg bg-muted p-3">
-                <p className="text-2xl font-bold tabular-nums text-green-600">{progress.totalDays}</p>
-                <p className="text-xs text-muted-foreground">Days Synced</p>
+            ) : (
+              /* Fallback to basic stats if no summary */
+              <div className="grid grid-cols-2 gap-4 text-center">
+                <div className="rounded-lg bg-muted p-3">
+                  <p className="text-2xl font-bold tabular-nums text-green-600">
+                    {progress.ordersProcessed.toLocaleString()}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Orders Imported</p>
+                </div>
+                <div className="rounded-lg bg-muted p-3">
+                  <p className="text-2xl font-bold tabular-nums text-green-600">{progress.totalDays}</p>
+                  <p className="text-xs text-muted-foreground">Days Synced</p>
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="flex justify-center">
               <Button onClick={() => onOpenChange(false)}>Done</Button>

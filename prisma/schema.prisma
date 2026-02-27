@@ -939,29 +939,31 @@ model LaborDetail {
 }
 
 model TransactionSummary {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   locationId       String
-  date             DateTime @db.Date
-  grossSales       Decimal  @default(0) @db.Decimal(12, 2)
-  discounts        Decimal  @default(0) @db.Decimal(12, 2)
-  comps            Decimal  @default(0) @db.Decimal(12, 2)
-  voids            Decimal  @default(0) @db.Decimal(12, 2)
-  refunds          Decimal  @default(0) @db.Decimal(12, 2)
-  netSales         Decimal  @default(0) @db.Decimal(12, 2)
-  cashPayments     Decimal  @default(0) @db.Decimal(12, 2)
-  cardPayments     Decimal  @default(0) @db.Decimal(12, 2)
-  giftCardPayments Decimal  @default(0) @db.Decimal(12, 2)
-  otherPayments    Decimal  @default(0) @db.Decimal(12, 2)
-  avgCheckSize     Decimal? @db.Decimal(10, 2)
-  avgTip           Decimal? @db.Decimal(10, 2)
-  tipPercent       Decimal? @db.Decimal(5, 2)
-  transactionCount Int      @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  location         Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  date             DateTime  @db.Date
+  grossSales       Decimal   @default(0) @db.Decimal(12, 2)
+  discounts        Decimal   @default(0) @db.Decimal(12, 2)
+  comps            Decimal   @default(0) @db.Decimal(12, 2)
+  voids            Decimal   @default(0) @db.Decimal(12, 2)
+  refunds          Decimal   @default(0) @db.Decimal(12, 2)
+  netSales         Decimal   @default(0) @db.Decimal(12, 2)
+  cashPayments     Decimal   @default(0) @db.Decimal(12, 2)
+  cardPayments     Decimal   @default(0) @db.Decimal(12, 2)
+  giftCardPayments Decimal   @default(0) @db.Decimal(12, 2)
+  otherPayments    Decimal   @default(0) @db.Decimal(12, 2)
+  avgCheckSize     Decimal?  @db.Decimal(10, 2)
+  avgTip           Decimal?  @db.Decimal(10, 2)
+  tipPercent       Decimal?  @db.Decimal(5, 2)
+  transactionCount Int       @default(0)
+  syncedAt         DateTime? // When this record was last synced from POS
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  location         Location  @relation(fields: [locationId], references: [id], onDelete: Cascade)
 
   @@unique([locationId, date])
   @@index([locationId, date])
+  @@index([locationId, syncedAt])
 }
 
 model CategorySales {

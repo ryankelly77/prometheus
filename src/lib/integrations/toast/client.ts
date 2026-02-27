@@ -191,12 +191,18 @@ export class ToastClient extends BaseApiClient {
   }
 
   /**
+   * Progress callback for fetchAllOrders
+   */
+  onFetchProgress?: (progress: { page: number; ordersLoaded: number }) => void;
+
+  /**
    * Fetch all orders for a date range with pagination
    * Uses RFC 5988 Link header with rel="next" for pagination
    */
   async fetchAllOrders(params: {
     startDate: Date;
     endDate: Date;
+    onProgress?: (progress: { page: number; ordersLoaded: number }) => void;
   }): Promise<ToastOrder[]> {
     const allOrders: ToastOrder[] = [];
     let nextUrl: string | undefined;
@@ -220,6 +226,11 @@ export class ToastClient extends BaseApiClient {
 
       if (response.orders && Array.isArray(response.orders)) {
         allOrders.push(...response.orders);
+      }
+
+      // Send progress callback if provided
+      if (params.onProgress) {
+        params.onProgress({ page: pageNumber, ordersLoaded: allOrders.length });
       }
 
       nextUrl = response.nextPageToken; // Contains full URL from Link header

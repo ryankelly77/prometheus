@@ -46,6 +46,15 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Get max syncedAt for the period (most recent sync for this month)
+    const syncedAtResult = await prisma.transactionSummary.aggregate({
+      where,
+      _max: {
+        syncedAt: true,
+      },
+    });
+    const lastSyncedAt = syncedAtResult._max.syncedAt;
+
     // Also fetch daypart metrics for the same period
     const daypartMetrics = await prisma.daypartMetrics.findMany({
       where,
@@ -111,6 +120,7 @@ export async function GET(request: NextRequest) {
       daypartMetrics,
       totals,
       count: dailyData.length,
+      lastSyncedAt: lastSyncedAt?.toISOString() ?? null,
     });
   } catch (error) {
     console.error("Sales data fetch error:", error);

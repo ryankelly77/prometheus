@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, Fragment, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { startOfMonth, endOfMonth, format } from 'date-fns'
+import { startOfMonth, endOfMonth, format, formatDistanceToNow } from 'date-fns'
 import {
   RefreshCw,
   MoreHorizontal,
@@ -221,6 +221,7 @@ export default function SalesDataPage() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
   const [integrationId, setIntegrationId] = useState<string | null>(null)
+  const [monthLastSyncAt, setMonthLastSyncAt] = useState<string | null>(null) // Per-month sync time
   const [refreshKey, setRefreshKey] = useState(0)
   const abortControllerRef = useRef<AbortController | null>(null)
 
@@ -255,6 +256,13 @@ export default function SalesDataPage() {
 
         const response = await fetch(`/api/sales/daily?${params.toString()}`)
         const result = await response.json()
+
+        // Capture month-specific last sync time
+        if (result.lastSyncedAt) {
+          setMonthLastSyncAt(result.lastSyncedAt)
+        } else {
+          setMonthLastSyncAt(null)
+        }
 
         if (result.data && result.data.length > 0) {
           // Group daypart metrics by date
@@ -342,7 +350,7 @@ export default function SalesDataPage() {
 
   // Fetch integration ID for current location
   useEffect(() => {
-    async function fetchIntegrationId() {
+    async function fetchIntegrationStatus() {
       if (!currentLocation?.id) return
       try {
         const response = await fetch(`/api/integrations/toast/status?locationId=${currentLocation.id}`)
@@ -351,10 +359,10 @@ export default function SalesDataPage() {
           setIntegrationId(data.integrationId)
         }
       } catch (error) {
-        console.error('Failed to fetch integration ID:', error)
+        console.error('Failed to fetch integration status:', error)
       }
     }
-    fetchIntegrationId()
+    fetchIntegrationStatus()
   }, [currentLocation?.id])
 
   // Use real data if available, otherwise fall back to mock
@@ -564,7 +572,16 @@ export default function SalesDataPage() {
           </SelectContent>
         </Select>
 
-        <div className="ml-auto text-sm text-muted-foreground">
+        <div className="ml-auto flex items-center gap-4 text-sm text-muted-foreground">
+          {hasRealData && monthLastSyncAt && (
+            <span>
+              Last synced: {format(new Date(monthLastSyncAt), 'MMM d, yyyy')} at{' '}
+              {format(new Date(monthLastSyncAt), 'h:mm a')}
+            </span>
+          )}
+          {hasRealData && !monthLastSyncAt && (
+            <span className="text-amber-600">Not yet synced for this period</span>
+          )}
           {hasRealData ? (
             <span className="text-green-600 font-medium">Live data from Toast</span>
           ) : (
