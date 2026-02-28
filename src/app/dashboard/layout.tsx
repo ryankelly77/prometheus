@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Sidebar, TopBar, MobileNav } from "@/components/navigation";
 import { LocationProvider, type LocationData } from "@/hooks/use-location";
 import {
@@ -27,9 +28,12 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const router = useRouter();
   const [locations, setLocations] = useState<LocationData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
 
   // Fetch locations from API
   useEffect(() => {
@@ -73,8 +77,41 @@ export default function DashboardLayout({
     fetchLocations();
   }, []);
 
-  // Loading state
-  if (isLoading) {
+  // Check onboarding status on every dashboard load
+  useEffect(() => {
+    // Skip check if already on onboarding page or settings
+    if (pathname?.startsWith("/dashboard/onboarding") ||
+        pathname?.startsWith("/dashboard/settings") ||
+        pathname?.startsWith("/dashboard/integrations")) {
+      setOnboardingChecked(true);
+      return;
+    }
+
+    async function checkOnboarding() {
+      try {
+        const response = await fetch("/api/onboarding/status");
+        const data = await response.json();
+
+        if (data.needsOnboarding) {
+          // Redirect to onboarding
+          router.replace("/dashboard/onboarding");
+          return;
+        }
+      } catch (err) {
+        // On error, don't block - let them through
+        console.error("Onboarding check failed:", err);
+      } finally {
+        setOnboardingChecked(true);
+      }
+    }
+
+    if (!isLoading) {
+      checkOnboarding();
+    }
+  }, [pathname, isLoading, router]);
+
+  // Loading state (wait for locations and onboarding check)
+  if (isLoading || !onboardingChecked) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">

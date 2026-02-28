@@ -574,6 +574,11 @@ model Integration {
   nextScheduledSync     DateTime?
   connectedAt           DateTime?
   connectedById         String?
+  // Onboarding state for progressive intelligence
+  onboardingStep        Int?                        // Current step in onboarding wizard (1=connecting, 2=syncing, 3=insights, etc.)
+  onboardingSyncedMonths Int                        @default(0) // Number of months synced during onboarding
+  onboardingStartedAt   DateTime?                   // When onboarding was initiated
+  onboardingCompletedAt DateTime?                   // When onboarding was completed (null = incomplete)
   createdAt             DateTime                    @default(now())
   updatedAt             DateTime                    @updatedAt
   connectedBy           UserProfile?                @relation(fields: [connectedById], references: [id])

@@ -79,6 +79,11 @@ export async function GET(request: NextRequest) {
       lastFullSync: config.lastFullSync,
       mappedLocations: syncStatus.mappedLocations,
       connectedAt: integration.connectedAt,
+      // Onboarding state
+      onboardingStep: integration.onboardingStep,
+      onboardingSyncedMonths: integration.onboardingSyncedMonths,
+      onboardingStartedAt: integration.onboardingStartedAt,
+      onboardingCompletedAt: integration.onboardingCompletedAt,
     });
   } catch (error) {
     console.error("Toast status error:", error);
