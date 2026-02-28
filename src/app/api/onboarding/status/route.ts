@@ -175,19 +175,25 @@ export async function GET(request: NextRequest) {
     const restaurantName = config.restaurantName ?? location.name;
 
     // Existing restaurant with Toast connected AND synced data
-    // Jump them to insights step
+    // Check if restaurant type is set - if not, start at restaurant type step
+    // If restaurant type is set, jump to insights step
     if (hasSyncedData) {
+      const hasRestaurantType = !!location.restaurantType;
+
       return NextResponse.json({
         needsOnboarding: true,
-        reason: "needs_insights",
+        reason: hasRestaurantType ? "needs_insights" : "needs_restaurant_type",
         locationId: location.id,
         integrationId: posIntegration.id,
-        currentStep: "reveal-pos-insights",
-        completedSteps: ["connect-pos", "syncing-pos"],
+        currentStep: hasRestaurantType ? "reveal-pos-insights" : "select-restaurant-type",
+        completedSteps: hasRestaurantType
+          ? ["connect-pos", "syncing-pos", "select-restaurant-type"]
+          : ["connect-pos", "syncing-pos"],
         // Include summary data for display
         posConnected: true,
         posName: "Toast",
         restaurantName,
+        restaurantType: location.restaurantType,
         syncedMonths: syncedMonthsCount,
         totalRevenue,
         daysWithData: syncedData[0]?._count.id ?? 0,

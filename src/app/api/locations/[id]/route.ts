@@ -12,6 +12,7 @@ const updateLocationSchema = z.object({
   zipCode: z.string().nullable().optional(),
   timezone: z.string().optional(),
   conceptType: z.string().nullable().optional(),
+  restaurantType: z.string().nullable().optional(),
   isActive: z.boolean().optional(),
   isDefault: z.boolean().optional(),
 });
@@ -121,6 +122,7 @@ export async function PATCH(
         ...(data.zipCode !== undefined && { zipCode: data.zipCode }),
         ...(data.timezone !== undefined && { timezone: data.timezone }),
         ...(data.conceptType !== undefined && { conceptType: data.conceptType }),
+        ...(data.restaurantType !== undefined && { restaurantType: data.restaurantType }),
         ...(data.isActive !== undefined && { isActive: data.isActive }),
         ...(data.isDefault !== undefined && { isDefault: data.isDefault }),
       },

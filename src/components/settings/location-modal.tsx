@@ -95,6 +95,21 @@ const CONCEPT_TYPES = [
   { value: 'other', label: 'Other' },
 ]
 
+const RESTAURANT_TYPES = [
+  { value: 'fine_dining', label: 'Fine Dining' },
+  { value: 'casual_dining', label: 'Casual Dining' },
+  { value: 'fast_casual', label: 'Fast Casual' },
+  { value: 'quick_service', label: 'Quick Service / QSR' },
+  { value: 'cafe', label: 'Café' },
+  { value: 'bar_pub', label: 'Bar / Pub / Tavern' },
+  { value: 'bistro', label: 'Bistro' },
+  { value: 'ethnic_specialty', label: 'Ethnic / Specialty' },
+  { value: 'food_truck', label: 'Food Truck / Mobile' },
+  { value: 'buffet', label: 'Buffet' },
+  { value: 'family_style', label: 'Family-Style' },
+  { value: 'ghost_kitchen', label: 'Ghost Kitchen / Virtual' },
+]
+
 interface Location {
   id: string
   name: string
@@ -105,6 +120,7 @@ interface Location {
   zip: string
   timezone: string
   conceptType?: string
+  restaurantType?: string
   restaurantGroupId?: string
   isDefault?: boolean
 }
@@ -140,6 +156,7 @@ export function LocationModal({
     zip: '',
     timezone: 'America/Chicago',
     conceptType: 'full_service',
+    restaurantType: '',
     restaurantGroupId: '',
     isDefault: false,
   })
@@ -155,6 +172,7 @@ export function LocationModal({
         zip: location.zip || '',
         timezone: location.timezone || 'America/Chicago',
         conceptType: location.conceptType || 'full_service',
+        restaurantType: location.restaurantType || '',
         restaurantGroupId: location.restaurantGroupId || restaurantGroups[0]?.id || '',
         isDefault: location.isDefault || false,
       })
@@ -168,6 +186,7 @@ export function LocationModal({
         zip: '',
         timezone: 'America/Chicago',
         conceptType: 'full_service',
+        restaurantType: '',
         restaurantGroupId: restaurantGroups[0]?.id || '',
         isDefault: false,
       })
@@ -334,6 +353,29 @@ export function LocationModal({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          {/* Restaurant Type (for AI benchmarking) */}
+          <div className="space-y-2">
+            <Label htmlFor="restaurantType">Restaurant Type (AI Benchmarking)</Label>
+            <Select
+              value={formData.restaurantType}
+              onValueChange={(value) => setFormData({ ...formData, restaurantType: value })}
+            >
+              <SelectTrigger id="restaurantType">
+                <SelectValue placeholder="Select for AI insights" />
+              </SelectTrigger>
+              <SelectContent>
+                {RESTAURANT_TYPES.map((type) => (
+                  <SelectItem key={type.value} value={type.value}>
+                    {type.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Used for AI-powered insights and industry benchmarking
+            </p>
           </div>
         </div>
 

@@ -29,12 +29,49 @@ type OnboardingStep =
   | 'welcome'
   | 'connect-pos'
   | 'syncing-pos'
+  | 'select-restaurant-type'
   | 'reveal-pos-insights'
   | 'teaser-accounting'
   | 'connect-accounting'
   | 'syncing-accounting'
   | 'reveal-combined-insights'
   | 'complete'
+
+// Restaurant type options
+type RestaurantType =
+  | 'fine_dining'
+  | 'casual_dining'
+  | 'fast_casual'
+  | 'quick_service'
+  | 'cafe'
+  | 'bar_pub'
+  | 'bistro'
+  | 'ethnic_specialty'
+  | 'food_truck'
+  | 'buffet'
+  | 'family_style'
+  | 'ghost_kitchen'
+
+interface RestaurantTypeOption {
+  value: RestaurantType
+  label: string
+  emoji: string
+}
+
+const RESTAURANT_TYPES: RestaurantTypeOption[] = [
+  { value: 'fine_dining', label: 'Fine Dining', emoji: '🍽️' },
+  { value: 'casual_dining', label: 'Casual Dining', emoji: '🍔' },
+  { value: 'fast_casual', label: 'Fast Casual', emoji: '🥗' },
+  { value: 'quick_service', label: 'Quick Service', emoji: '⚡' },
+  { value: 'cafe', label: 'Café', emoji: '☕' },
+  { value: 'bar_pub', label: 'Bar / Pub', emoji: '🍺' },
+  { value: 'bistro', label: 'Bistro', emoji: '🥘' },
+  { value: 'ethnic_specialty', label: 'Ethnic / Specialty', emoji: '🍲' },
+  { value: 'food_truck', label: 'Food Truck', emoji: '🚚' },
+  { value: 'buffet', label: 'Buffet', emoji: '🍱' },
+  { value: 'family_style', label: 'Family-Style', emoji: '👨‍👩‍👧‍👦' },
+  { value: 'ghost_kitchen', label: 'Ghost Kitchen / Virtual', emoji: '👻' },
+]
 
 interface MonthStatus {
   label: string
@@ -114,6 +151,8 @@ export default function OnboardingPage() {
   const [totalSynced, setTotalSynced] = useState({ sales: 0, orders: 0 })
   const [completedSteps, setCompletedSteps] = useState<string[]>([])
   const [preCompletedData, setPreCompletedData] = useState<PreCompletedData | null>(null)
+  const [selectedRestaurantType, setSelectedRestaurantType] = useState<RestaurantType | null>(null)
+  const [isSavingRestaurantType, setIsSavingRestaurantType] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const locationToUse = currentLocation ?? locations[0]
@@ -325,9 +364,8 @@ export default function OnboardingPage() {
 
     setCurrentMonthIndex(-1)
 
-    // Generate insights
-    setStep('reveal-pos-insights')
-    await generatePosInsights()
+    // Go to restaurant type selection before insights
+    setStep('select-restaurant-type')
   }, [syncMonth])
 
   // Generate POS insights
@@ -372,6 +410,54 @@ export default function OnboardingPage() {
       setIsGeneratingInsights(false)
     }
   }, [locationId, locationToUse?.id])
+
+  // Save restaurant type and proceed to insights
+  const saveRestaurantTypeAndContinue = async () => {
+    if (!selectedRestaurantType) {
+      toast({
+        title: 'Please select a restaurant type',
+        description: 'This helps us tailor insights to your concept.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    const locId = locationId ?? locationToUse?.id
+    if (!locId) {
+      console.error('[Onboarding] No locationId available')
+      return
+    }
+
+    setIsSavingRestaurantType(true)
+
+    try {
+      const response = await fetch(`/api/locations/${locId}/restaurant-type`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restaurantType: selectedRestaurantType }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to save restaurant type')
+      }
+
+      // Add to completed steps
+      setCompletedSteps(prev => [...prev, 'select-restaurant-type'])
+
+      // Proceed to insights
+      setStep('reveal-pos-insights')
+      await generatePosInsights()
+    } catch (error) {
+      console.error('Failed to save restaurant type:', error)
+      toast({
+        title: 'Failed to save',
+        description: 'Please try again.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSavingRestaurantType(false)
+    }
+  }
 
   // Mark onboarding as complete
   const markOnboardingComplete = async () => {
@@ -421,14 +507,14 @@ export default function OnboardingPage() {
     <div className="container max-w-3xl py-8 space-y-8">
       {/* Progress indicator */}
       <div className="flex items-center justify-center gap-2">
-        {['connect-pos', 'syncing-pos', 'reveal-pos-insights', 'teaser-accounting'].map((s, i) => (
+        {['connect-pos', 'syncing-pos', 'select-restaurant-type', 'reveal-pos-insights', 'teaser-accounting'].map((s, i) => (
           <div
             key={s}
             className={cn(
-              'h-2 w-16 rounded-full transition-colors',
+              'h-2 w-12 rounded-full transition-colors',
               completedSteps.includes(s) || step === s || (['welcome', 'connect-pos'].includes(step) && i === 0)
                 ? 'bg-primary'
-                : i < ['connect-pos', 'syncing-pos', 'reveal-pos-insights', 'teaser-accounting'].indexOf(step)
+                : i < ['connect-pos', 'syncing-pos', 'select-restaurant-type', 'reveal-pos-insights', 'teaser-accounting'].indexOf(step)
                   ? 'bg-primary'
                   : 'bg-muted'
             )}
@@ -436,8 +522,8 @@ export default function OnboardingPage() {
         ))}
       </div>
 
-      {/* Pre-completed steps summary (shown when starting at insights step) */}
-      {(isPosConnectComplete || isSyncComplete) && step === 'reveal-pos-insights' && preCompletedData && (
+      {/* Pre-completed steps summary (shown when on restaurant type or insights step) */}
+      {(isPosConnectComplete || isSyncComplete) && (step === 'select-restaurant-type' || step === 'reveal-pos-insights') && preCompletedData && (
         <div className="space-y-3">
           {/* Connect POS - Completed */}
           <Card className="border-green-200 dark:border-green-900 bg-green-50/30 dark:bg-green-950/10">
@@ -650,6 +736,71 @@ export default function OnboardingPage() {
             <p className="text-center text-sm text-muted-foreground">
               This usually takes 2-3 minutes. You can leave this page and we&apos;ll continue in the background.
             </p>
+          </motion.div>
+        )}
+
+        {/* Select Restaurant Type Step */}
+        {step === 'select-restaurant-type' && (
+          <motion.div
+            key="select-restaurant-type"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="space-y-6"
+          >
+            <div className="text-center space-y-2">
+              <h1 className="text-2xl font-bold">
+                What type of restaurant is{' '}
+                {preCompletedData?.restaurantName ?? locationToUse?.name ?? 'your restaurant'}?
+              </h1>
+              <p className="text-muted-foreground">
+                This helps us tailor insights, benchmarks, and recommendations to your concept.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {RESTAURANT_TYPES.map((type) => (
+                <Card
+                  key={type.value}
+                  className={cn(
+                    'cursor-pointer transition-all hover:border-primary/50',
+                    selectedRestaurantType === type.value
+                      ? 'border-primary bg-primary/5 ring-2 ring-primary ring-offset-2'
+                      : 'hover:bg-muted/50'
+                  )}
+                  onClick={() => setSelectedRestaurantType(type.value)}
+                >
+                  <CardContent className="flex flex-col items-center justify-center p-4 text-center">
+                    <span className="text-2xl mb-2">{type.emoji}</span>
+                    <span className={cn(
+                      'text-sm font-medium',
+                      selectedRestaurantType === type.value && 'text-primary'
+                    )}>
+                      {type.label}
+                    </span>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            <Button
+              size="lg"
+              className="w-full"
+              onClick={saveRestaurantTypeAndContinue}
+              disabled={!selectedRestaurantType || isSavingRestaurantType}
+            >
+              {isSavingRestaurantType ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  Continue
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </>
+              )}
+            </Button>
           </motion.div>
         )}
 

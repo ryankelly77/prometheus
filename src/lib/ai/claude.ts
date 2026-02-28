@@ -10,9 +10,95 @@ import Anthropic from "@anthropic-ai/sdk";
 // Initialize the client (uses ANTHROPIC_API_KEY env var by default)
 const anthropic = new Anthropic();
 
+export type RestaurantType =
+  | "fine_dining"
+  | "casual_dining"
+  | "fast_casual"
+  | "quick_service"
+  | "cafe"
+  | "bar_pub"
+  | "bistro"
+  | "ethnic_specialty"
+  | "food_truck"
+  | "buffet"
+  | "family_style"
+  | "ghost_kitchen";
+
+export interface RestaurantTypeContext {
+  label: string;
+  benchmarks: string;
+  strategies: string;
+}
+
+export const RESTAURANT_TYPE_CONTEXT: Record<RestaurantType, RestaurantTypeContext> = {
+  fine_dining: {
+    label: "Fine Dining",
+    benchmarks: "Average check $100-300, 60-120 covers/night, food cost 28-35%, labor 30-35%, wine/beverage 25-40% of revenue",
+    strategies: "Focus on experience, wine program, private events, tasting menus, seasonal menu rotations, sommelier-driven upselling",
+  },
+  casual_dining: {
+    label: "Casual Dining",
+    benchmarks: "Average check $40-80, 150-300 covers/night, food cost 28-32%, labor 25-30%, bar 20-30% of revenue",
+    strategies: "Happy hour programs, loyalty/rewards, family promotions, online ordering, catering, local partnerships",
+  },
+  fast_casual: {
+    label: "Fast Casual",
+    benchmarks: "Average check $12-25, 200-500 transactions/day, food cost 28-32%, labor 25-28%, minimal bar revenue",
+    strategies: "Speed of service optimization, digital ordering, loyalty apps, catering, daypart expansion, LTO items",
+  },
+  quick_service: {
+    label: "Quick Service / QSR",
+    benchmarks: "Average check $8-15, 300-800 transactions/day, food cost 25-30%, labor 22-28%, drive-thru 60-70% of sales",
+    strategies: "Drive-thru optimization, combo meal engineering, mobile ordering, breakfast daypart, late night",
+  },
+  cafe: {
+    label: "Café",
+    benchmarks: "Average check $8-18, beverage-heavy mix (60%+ beverage), food cost 25-30%, morning peak critical",
+    strategies: "Morning rush optimization, food attachment rate, afternoon daypart, retail merchandise, catering",
+  },
+  bar_pub: {
+    label: "Bar / Pub / Tavern",
+    benchmarks: "Average check $25-50, beverage 50-70% of revenue, food cost 28-35% on food items, late night important",
+    strategies: "Happy hour strategy, live events/entertainment, sports programming, late night food, trivia/game nights",
+  },
+  bistro: {
+    label: "Bistro",
+    benchmarks: "Average check $50-100, 80-150 covers/night, wine 20-30% of revenue, food cost 30-35%",
+    strategies: "Prix fixe menus, wine pairing programs, seasonal rotations, weekday specials, neighborhood loyalty",
+  },
+  ethnic_specialty: {
+    label: "Ethnic / Specialty Restaurant",
+    benchmarks: "Average check $20-60, varies widely by cuisine, food cost 28-35%, authenticity drives loyalty",
+    strategies: "Cultural event tie-ins, family-style options, catering for cultural events, cooking classes, takeout/delivery",
+  },
+  food_truck: {
+    label: "Food Truck / Mobile Vendor",
+    benchmarks: "Average check $10-18, 100-300 transactions/day, food cost 28-35%, location is everything",
+    strategies: "Location optimization, event booking, social media presence, catering, commissary efficiency",
+  },
+  buffet: {
+    label: "Buffet",
+    benchmarks: "Fixed price $15-40, high volume, food cost 35-45%, labor efficient, waste management critical",
+    strategies: "Waste reduction, station optimization, off-peak pricing, group/party packages, holiday specials",
+  },
+  family_style: {
+    label: "Family-Style Restaurant",
+    benchmarks: "Average check $15-35, high table turns, family-friendly, food cost 28-33%, kids menu important",
+    strategies: "Kids eat free promotions, birthday parties, early bird specials, takeout family meals, weeknight bundles",
+  },
+  ghost_kitchen: {
+    label: "Ghost Kitchen / Virtual Restaurant",
+    benchmarks: "Average check $20-40, 100% delivery/pickup, food cost 28-33%, no FOH labor, 15-30% commission to platforms",
+    strategies: "Platform optimization, virtual brand expansion, delivery radius analysis, packaging quality, menu engineering for delivery",
+  },
+};
+
 export interface IntelligenceRequest {
   locationName: string;
   dataType: "pos" | "accounting" | "combined";
+  restaurantType?: RestaurantType | null;
+  city?: string | null;
+  state?: string | null;
   salesData?: {
     months: number;
     totalRevenue: number;
@@ -41,14 +127,31 @@ export interface IntelligenceResponse {
   dataQuality: "excellent" | "good" | "limited";
 }
 
-const SYSTEM_PROMPT = `You are an expert restaurant analytics consultant. Your role is to analyze restaurant data and provide actionable insights in a concise, professional manner.
+function buildSystemPrompt(restaurantType?: RestaurantType | null): string {
+  const typeContext = restaurantType ? RESTAURANT_TYPE_CONTEXT[restaurantType] : null;
+
+  let prompt = `You are an expert restaurant analytics consultant`;
+
+  if (typeContext) {
+    prompt += ` specializing in ${typeContext.label} restaurants`;
+  }
+
+  prompt += `. Your role is to analyze restaurant data and provide actionable insights in a concise, professional manner.
 
 Guidelines:
 - Be specific and actionable - avoid generic advice
 - Use actual numbers from the data provided
 - Focus on patterns and opportunities
 - Keep insights brief (1-2 sentences each)
-- Recommendations should be concrete steps the restaurant can take
+- Recommendations should be concrete steps the restaurant can take`;
+
+  if (typeContext) {
+    prompt += `
+- Compare performance against industry benchmarks for ${typeContext.label} operations
+- Tailor recommendations to strategies that work for this restaurant type`;
+  }
+
+  prompt += `
 
 Format your response as JSON with this structure:
 {
@@ -59,10 +162,14 @@ Format your response as JSON with this structure:
   "dataQuality": "excellent|good|limited"
 }`;
 
+  return prompt;
+}
+
 export async function generateIntelligence(
   request: IntelligenceRequest
 ): Promise<IntelligenceResponse> {
   const userPrompt = buildUserPrompt(request);
+  const systemPrompt = buildSystemPrompt(request.restaurantType);
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-5-20250929",
@@ -73,7 +180,7 @@ export async function generateIntelligence(
         content: userPrompt,
       },
     ],
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
   });
 
   // Extract the text content
@@ -112,6 +219,23 @@ export async function generateIntelligence(
 
 function buildUserPrompt(request: IntelligenceRequest): string {
   const parts: string[] = [];
+  const typeContext = request.restaurantType ? RESTAURANT_TYPE_CONTEXT[request.restaurantType] : null;
+
+  // Restaurant profile section
+  parts.push("## Restaurant Profile");
+  parts.push(`- Name: ${request.locationName}`);
+  if (typeContext) {
+    parts.push(`- Type: ${typeContext.label}`);
+  }
+  if (request.city || request.state) {
+    const location = [request.city, request.state].filter(Boolean).join(", ");
+    parts.push(`- Location: ${location}`);
+  }
+  if (typeContext) {
+    parts.push(`- Industry Benchmarks: ${typeContext.benchmarks}`);
+    parts.push(`- Typical Strategies: ${typeContext.strategies}`);
+  }
+  parts.push("");
 
   parts.push(`Analyze the following data for ${request.locationName}:`);
   parts.push("");
@@ -161,9 +285,15 @@ function buildUserPrompt(request: IntelligenceRequest): string {
     parts.push("");
   }
 
-  parts.push(
-    "Provide your analysis focusing on actionable insights for this restaurant."
-  );
+  if (typeContext) {
+    parts.push(
+      `Provide your analysis focusing on actionable insights for this ${typeContext.label} restaurant. Use the industry benchmarks to compare their performance and make recommendations that are SPECIFIC to a ${typeContext.label} operation. Reference industry standards where relevant.`
+    );
+  } else {
+    parts.push(
+      "Provide your analysis focusing on actionable insights for this restaurant."
+    );
+  }
 
   return parts.join("\n");
 }

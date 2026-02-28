@@ -75,6 +75,7 @@ model Location {
   longitude           Float?
   timezone            String               @default("America/Chicago")
   conceptType         String?
+  restaurantType      String?              // fine_dining, casual_dining, fast_casual, quick_service, cafe, bar_pub, bistro, ethnic_specialty, food_truck, buffet, family_style, ghost_kitchen
   isActive            Boolean              @default(true)
   isDefault           Boolean              @default(false)
   createdAt           DateTime             @default(now())

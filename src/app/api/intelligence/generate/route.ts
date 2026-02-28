@@ -6,6 +6,7 @@ import {
   generateIntelligence,
   isClaudeConfigured,
   type IntelligenceRequest,
+  type RestaurantType,
 } from "@/lib/ai/claude";
 
 const requestSchema = z.object({
@@ -58,6 +59,9 @@ export async function POST(request: NextRequest) {
     const intelligenceRequest: IntelligenceRequest = {
       locationName: location.name,
       dataType,
+      restaurantType: location.restaurantType as RestaurantType | null,
+      city: location.city,
+      state: location.state,
     };
 
     // Fetch sales data if requested
