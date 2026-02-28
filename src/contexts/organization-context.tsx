@@ -74,6 +74,14 @@ export function OrganizationProvider({
 
       const data = await response.json();
       setOrganization(data.branding);
+      // Cache branding in localStorage to prevent flash on next load
+      if (data.branding) {
+        try {
+          localStorage.setItem('prometheus_branding', JSON.stringify(data.branding));
+        } catch {
+          // Ignore localStorage errors
+        }
+      }
     } catch (err) {
       console.error("Failed to fetch organization:", err);
       setError(err instanceof Error ? err.message : "Unknown error");
