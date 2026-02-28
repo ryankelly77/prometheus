@@ -60,18 +60,18 @@ interface RestaurantTypeOption {
 }
 
 const RESTAURANT_TYPES: RestaurantTypeOption[] = [
-  { value: 'fine_dining', label: 'Fine Dining', emoji: '🍽️', qualifier: 'Avg check $100-300' },
-  { value: 'casual_dining', label: 'Casual Dining', emoji: '🍔', qualifier: 'Avg check $40-80' },
-  { value: 'fast_casual', label: 'Fast Casual', emoji: '🥗', qualifier: 'Avg check $12-25' },
-  { value: 'quick_service', label: 'Quick Service', emoji: '⚡', qualifier: 'Avg check $8-15' },
-  { value: 'cafe', label: 'Café', emoji: '☕', qualifier: 'Beverage-focused' },
-  { value: 'bar_pub', label: 'Bar / Pub', emoji: '🍺', qualifier: '50-70% beverage' },
-  { value: 'bistro', label: 'Bistro', emoji: '🥘', qualifier: 'Avg check $50-100' },
-  { value: 'ethnic_specialty', label: 'Ethnic / Specialty', emoji: '🍲', qualifier: 'Cuisine-focused' },
-  { value: 'food_truck', label: 'Food Truck', emoji: '🚚', qualifier: 'Mobile vendor' },
-  { value: 'buffet', label: 'Buffet', emoji: '🍱', qualifier: 'Fixed price $15-40' },
-  { value: 'family_style', label: 'Family-Style', emoji: '👨‍👩‍👧‍👦', qualifier: 'Avg check $15-35' },
-  { value: 'ghost_kitchen', label: 'Ghost Kitchen / Virtual', emoji: '👻', qualifier: '100% delivery' },
+  { value: 'fine_dining', label: 'Fine Dining', emoji: '🍽️', qualifier: '$100+ check · white tablecloth' },
+  { value: 'casual_dining', label: 'Casual Dining', emoji: '🍔', qualifier: '$40-80 check · full service' },
+  { value: 'fast_casual', label: 'Fast Casual', emoji: '🥗', qualifier: '$12-25 check · counter order' },
+  { value: 'quick_service', label: 'Quick Service', emoji: '⚡', qualifier: '$8-15 check · drive-thru' },
+  { value: 'cafe', label: 'Café', emoji: '☕', qualifier: 'Coffee & light fare' },
+  { value: 'bar_pub', label: 'Bar / Pub', emoji: '🍺', qualifier: 'Drinks primary · food secondary' },
+  { value: 'bistro', label: 'Bistro', emoji: '🥘', qualifier: '$50-100 check · neighborhood feel' },
+  { value: 'ethnic_specialty', label: 'Ethnic / Specialty', emoji: '🍲', qualifier: 'Cuisine-specific concept' },
+  { value: 'food_truck', label: 'Food Truck', emoji: '🚚', qualifier: 'Mobile or pop-up' },
+  { value: 'buffet', label: 'Buffet', emoji: '🍱', qualifier: 'Self-serve · fixed price' },
+  { value: 'family_style', label: 'Family-Style', emoji: '👨‍👩‍👧‍👦', qualifier: 'Kids menu · high turnover' },
+  { value: 'ghost_kitchen', label: 'Ghost Kitchen / Virtual', emoji: '👻', qualifier: 'Delivery only · no dine-in' },
 ]
 
 interface MonthStatus {
@@ -786,6 +786,9 @@ export default function OnboardingPage() {
               </h1>
               <p className="text-muted-foreground">
                 This helps us tailor insights, benchmarks, and recommendations to your concept.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Not sure? Pick based on your average check size and service style.
               </p>
             </div>
 
