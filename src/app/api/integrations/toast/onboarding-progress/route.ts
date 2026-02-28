@@ -5,7 +5,7 @@ import { requireRole } from "@/lib/auth/require-role";
 
 const requestSchema = z.object({
   integrationId: z.string(),
-  syncedMonths: z.number().min(0).max(12),
+  syncedMonths: z.number().min(0).max(100), // Allow more months for accounts with historical data
   step: z.number().min(1).max(10),
 });
 

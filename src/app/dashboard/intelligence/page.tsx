@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Brain, History } from 'lucide-react'
+import { Brain, History, Settings2 } from 'lucide-react'
+import Link from 'next/link'
 import { useLocation } from '@/hooks/use-location'
 import {
   reportCategories,
@@ -188,6 +189,13 @@ export default function IntelligencePage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            href="/dashboard/settings/intelligence"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            Edit what Prometheus knows about you
+          </Link>
           <Button
             variant={showHistory ? 'secondary' : 'ghost'}
             size="sm"

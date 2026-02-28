@@ -1,11 +1,12 @@
 /**
  * Claude AI Client
  *
- * Provides a simple interface to the Anthropic Claude API for generating
- * restaurant intelligence insights.
+ * Provides a comprehensive interface to the Anthropic Claude API for generating
+ * restaurant intelligence insights with full restaurant profile context.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import prisma from "@/lib/prisma";
 
 // Initialize the client (uses ANTHROPIC_API_KEY env var by default)
 const anthropic = new Anthropic();
@@ -93,7 +94,54 @@ export const RESTAURANT_TYPE_CONTEXT: Record<RestaurantType, RestaurantTypeConte
   },
 };
 
+export interface DataFacts {
+  avgMonthlyRevenue?: number;
+  avgDailyRevenue?: number;
+  avgCheck?: number;
+  totalMonthsOfData?: number;
+  totalOrders?: number;
+  avgDailyOrders?: number;
+  peakDays?: string[];
+  weakestDays?: string[];
+  dayOfWeekAvg?: Record<string, number>;
+  revenueMix?: { food?: number; wine?: number; beer?: number; liquor?: number };
+  monthlyTrend?: Array<{ month: string; netSales: number; orders: number }>;
+  monthOverMonthGrowth?: number;
+  seasonalPeak?: string;
+}
+
+export interface RestaurantProfile {
+  id: string;
+  locationId: string;
+  restaurantType?: string | null;
+  conceptDescription?: string | null;
+  cuisineType?: string | null;
+  priceRange?: string | null;
+  seatingCapacity?: number | null;
+  neighborhood?: string | null;
+  targetDemographic?: string | null;
+  selectedDescriptors: string[];
+  userContext: string[];
+  dataFacts: DataFacts;
+  factsUpdatedAt?: Date | null;
+}
+
+export interface PreviousInsight {
+  id: string;
+  title: string | null;
+  content: string;
+  generatedAt: Date;
+}
+
+export interface InsightFeedbackRecord {
+  insightId: string;
+  insightTitle: string | null;
+  rating: string;
+  userComment: string | null;
+}
+
 export interface IntelligenceRequest {
+  locationId: string;
   locationName: string;
   dataType: "pos" | "accounting" | "combined";
   restaurantType?: RestaurantType | null;
@@ -117,6 +165,10 @@ export interface IntelligenceRequest {
     primeCost: number;
     trend: "up" | "down" | "flat";
   };
+  // Enhanced profile data (loaded from database)
+  profile?: RestaurantProfile | null;
+  previousInsights?: PreviousInsight[];
+  feedbackRecords?: InsightFeedbackRecord[];
 }
 
 export interface IntelligenceResponse {
@@ -127,53 +179,514 @@ export interface IntelligenceResponse {
   dataQuality: "excellent" | "good" | "limited";
 }
 
-function buildSystemPrompt(restaurantType?: RestaurantType | null): string {
-  const typeContext = restaurantType ? RESTAURANT_TYPE_CONTEXT[restaurantType] : null;
+/**
+ * Load full restaurant profile and context from database
+ */
+export async function loadRestaurantContext(locationId: string): Promise<{
+  profile: RestaurantProfile | null;
+  previousInsights: PreviousInsight[];
+  feedbackRecords: InsightFeedbackRecord[];
+}> {
+  // Load restaurant profile
+  const profile = await prisma.restaurantProfile.findUnique({
+    where: { locationId },
+  });
 
-  let prompt = `You are an expert restaurant analytics consultant`;
+  // Load previous insights (last 10)
+  const insights = await prisma.aIInsight.findMany({
+    where: { locationId },
+    orderBy: { generatedAt: "desc" },
+    take: 10,
+    select: {
+      id: true,
+      title: true,
+      content: true,
+      generatedAt: true,
+    },
+  });
 
-  if (typeContext) {
-    prompt += ` specializing in ${typeContext.label} restaurants`;
+  // Load feedback on previous insights
+  const feedback = await prisma.insightFeedback.findMany({
+    where: { locationId },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    include: {
+      insight: {
+        select: {
+          id: true,
+          title: true,
+        },
+      },
+    },
+  });
+
+  return {
+    profile: profile
+      ? {
+          ...profile,
+          dataFacts: (profile.dataFacts as DataFacts) || {},
+        }
+      : null,
+    previousInsights: insights,
+    feedbackRecords: feedback.map((f) => ({
+      insightId: f.insightId,
+      insightTitle: f.insight.title,
+      rating: f.rating,
+      userComment: f.userComment,
+    })),
+  };
+}
+
+/**
+ * Calculate data facts from transaction data
+ */
+export async function calculateDataFacts(locationId: string): Promise<DataFacts> {
+  const sevenMonthsAgo = new Date();
+  sevenMonthsAgo.setMonth(sevenMonthsAgo.getMonth() - 7);
+  sevenMonthsAgo.setDate(1);
+
+  // Get all transaction summaries
+  const transactions = await prisma.transactionSummary.findMany({
+    where: {
+      locationId,
+      date: { gte: sevenMonthsAgo },
+    },
+    orderBy: { date: "desc" },
+  });
+
+  if (transactions.length === 0) {
+    return {};
   }
 
-  prompt += `. Your role is to analyze restaurant data and provide actionable insights in a concise, professional manner.
+  // Calculate totals
+  const totalRevenue = transactions.reduce((sum, tx) => sum + Number(tx.netSales ?? 0), 0);
+  const totalOrders = transactions.reduce((sum, tx) => sum + (tx.transactionCount ?? 0), 0);
+  const daysWithData = transactions.length;
+
+  // Calculate averages
+  const avgDailyRevenue = totalRevenue / daysWithData;
+  const avgDailyOrders = totalOrders / daysWithData;
+  const avgCheck = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+  // Group by day of week
+  const dayOfWeekTotals: Record<string, { revenue: number; count: number }> = {};
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  for (const tx of transactions) {
+    const dayIndex = new Date(tx.date).getDay();
+    const dayName = dayNames[dayIndex];
+    if (!dayOfWeekTotals[dayName]) {
+      dayOfWeekTotals[dayName] = { revenue: 0, count: 0 };
+    }
+    dayOfWeekTotals[dayName].revenue += Number(tx.netSales ?? 0);
+    dayOfWeekTotals[dayName].count += 1;
+  }
+
+  // Calculate day of week averages
+  const dayOfWeekAvg: Record<string, number> = {};
+  for (const [day, data] of Object.entries(dayOfWeekTotals)) {
+    dayOfWeekAvg[day] = Math.round(data.revenue / data.count);
+  }
+
+  // Sort days by revenue
+  const sortedDays = Object.entries(dayOfWeekAvg)
+    .sort(([, a], [, b]) => b - a)
+    .map(([day]) => day);
+
+  const peakDays = sortedDays.slice(0, 3);
+  const weakestDays = sortedDays.slice(-2).reverse();
+
+  // Group by month for trends
+  const monthlyData: Record<string, { revenue: number; orders: number }> = {};
+  for (const tx of transactions) {
+    const date = new Date(tx.date);
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    if (!monthlyData[monthKey]) {
+      monthlyData[monthKey] = { revenue: 0, orders: 0 };
+    }
+    monthlyData[monthKey].revenue += Number(tx.netSales ?? 0);
+    monthlyData[monthKey].orders += tx.transactionCount ?? 0;
+  }
+
+  const monthlyTrend = Object.entries(monthlyData)
+    .map(([month, data]) => ({
+      month,
+      netSales: Math.round(data.revenue),
+      orders: data.orders,
+    }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+
+  // Calculate month-over-month growth
+  let monthOverMonthGrowth = 0;
+  if (monthlyTrend.length >= 2) {
+    const latest = monthlyTrend[monthlyTrend.length - 1].netSales;
+    const previous = monthlyTrend[monthlyTrend.length - 2].netSales;
+    if (previous > 0) {
+      monthOverMonthGrowth = ((latest - previous) / previous) * 100;
+    }
+  }
+
+  // Find seasonal peak (highest revenue month)
+  const seasonalPeak = monthlyTrend.length > 0
+    ? monthlyTrend.reduce((max, m) => (m.netSales > max.netSales ? m : max)).month
+    : undefined;
+
+  // Calculate average monthly revenue
+  const totalMonthsOfData = monthlyTrend.length;
+  const avgMonthlyRevenue = totalMonthsOfData > 0 ? totalRevenue / totalMonthsOfData : 0;
+
+  // Get category breakdown from daypart metrics
+  const daypartMetrics = await prisma.daypartMetrics.findMany({
+    where: {
+      locationId,
+      date: { gte: sevenMonthsAgo },
+    },
+  });
+
+  let foodTotal = 0;
+  let wineTotal = 0;
+  let beerTotal = 0;
+  let liquorTotal = 0;
+
+  for (const dp of daypartMetrics) {
+    foodTotal += Number(dp.foodSales ?? 0);
+    wineTotal += Number(dp.wineSales ?? 0);
+    beerTotal += Number(dp.beerSales ?? 0);
+    liquorTotal += Number(dp.liquorSales ?? 0);
+  }
+
+  const categoryTotal = foodTotal + wineTotal + beerTotal + liquorTotal;
+  const revenueMix =
+    categoryTotal > 0
+      ? {
+          food: Math.round((foodTotal / categoryTotal) * 100),
+          wine: Math.round((wineTotal / categoryTotal) * 100),
+          beer: Math.round((beerTotal / categoryTotal) * 100),
+          liquor: Math.round((liquorTotal / categoryTotal) * 100),
+        }
+      : undefined;
+
+  return {
+    avgMonthlyRevenue: Math.round(avgMonthlyRevenue),
+    avgDailyRevenue: Math.round(avgDailyRevenue),
+    avgCheck: Math.round(avgCheck * 100) / 100,
+    totalMonthsOfData,
+    totalOrders,
+    avgDailyOrders: Math.round(avgDailyOrders),
+    peakDays,
+    weakestDays,
+    dayOfWeekAvg,
+    revenueMix,
+    monthlyTrend,
+    monthOverMonthGrowth: Math.round(monthOverMonthGrowth * 10) / 10,
+    seasonalPeak,
+  };
+}
+
+/**
+ * Update restaurant profile with calculated data facts
+ */
+export async function updateDataFacts(locationId: string): Promise<DataFacts> {
+  const facts = await calculateDataFacts(locationId);
+
+  // Upsert the profile with new facts
+  await prisma.restaurantProfile.upsert({
+    where: { locationId },
+    create: {
+      locationId,
+      dataFacts: facts as object,
+      factsUpdatedAt: new Date(),
+    },
+    update: {
+      dataFacts: facts as object,
+      factsUpdatedAt: new Date(),
+    },
+  });
+
+  return facts;
+}
+
+function buildSystemPrompt(): string {
+  return `You are an expert restaurant analytics consultant who provides highly tailored, actionable insights. Your role is to analyze restaurant data and provide personalized recommendations that respect the restaurant's unique identity and context.
 
 Guidelines:
-- Be specific and actionable - avoid generic advice
+- Be specific and actionable - never give generic advice
 - Use actual numbers from the data provided
-- Focus on patterns and opportunities
-- Keep insights brief (1-2 sentences each)
-- Recommendations should be concrete steps the restaurant can take`;
+- Respect the operator's stated context as ground truth
+- Tailor recommendations to both the restaurant TYPE (financial benchmarks) and CONCEPT (brand identity)
+- Focus on opportunities, not just observations
+- Each insight should have a clear, implementable recommendation
 
-  if (typeContext) {
-    prompt += `
-- Compare performance against industry benchmarks for ${typeContext.label} operations
-- Tailor recommendations to strategies that work for this restaurant type`;
-  }
-
-  prompt += `
-
-Format your response as JSON with this structure:
+CRITICAL: Return your response as valid JSON with this exact structure:
 {
-  "title": "Short headline summarizing the key finding",
-  "summary": "2-3 sentence executive summary",
-  "insights": ["insight 1", "insight 2", "insight 3"],
-  "recommendations": ["recommendation 1", "recommendation 2"],
+  "title": "Concise headline summarizing the key finding",
+  "summary": "2-3 sentence executive summary of the analysis",
+  "insights": ["insight 1 with specific numbers", "insight 2", "insight 3"],
+  "recommendations": ["specific actionable recommendation 1", "recommendation 2"],
   "dataQuality": "excellent|good|limited"
 }`;
+}
 
-  return prompt;
+function buildUserPrompt(request: IntelligenceRequest): string {
+  const parts: string[] = [];
+  const typeContext = request.restaurantType ? RESTAURANT_TYPE_CONTEXT[request.restaurantType] : null;
+  const profile = request.profile;
+
+  // == RESTAURANT PROFILE ==
+  parts.push("== RESTAURANT PROFILE ==");
+  parts.push(`Name: ${request.locationName}`);
+  if (typeContext) {
+    parts.push(`Type: ${typeContext.label}`);
+  }
+  if (profile?.conceptDescription) {
+    parts.push(`Concept: ${profile.conceptDescription}`);
+  }
+  if (profile?.cuisineType) {
+    parts.push(`Cuisine: ${profile.cuisineType}`);
+  }
+  if (request.city || request.state) {
+    const location = [request.city, request.state].filter(Boolean).join(", ");
+    parts.push(`Location: ${location}`);
+  }
+  if (profile?.neighborhood) {
+    parts.push(`Neighborhood: ${profile.neighborhood}`);
+  }
+  if (profile?.priceRange) {
+    parts.push(`Price Range: ${profile.priceRange}`);
+  }
+  if (profile?.seatingCapacity) {
+    parts.push(`Seating Capacity: ${profile.seatingCapacity}`);
+  }
+  if (profile?.targetDemographic) {
+    parts.push(`Target Customer: ${profile.targetDemographic}`);
+  }
+  parts.push("");
+
+  // == TYPE vs CONCEPT GUIDANCE ==
+  if (typeContext && profile?.conceptDescription) {
+    parts.push("== TYPE vs CONCEPT GUIDANCE ==");
+    parts.push(
+      `This restaurant operates as a ${typeContext.label} financially, but has the brand identity of "${profile.conceptDescription}".`
+    );
+    parts.push("Use TYPE for financial benchmarks and operational efficiency targets.");
+    parts.push("Use CONCEPT for all recommendation tone, language, and suggested strategies.");
+    parts.push("NEVER suggest strategies that conflict with the concept identity.");
+    parts.push(
+      "Example: A $150 avg check French brasserie operates like fine dining financially but recommendations should match brasserie identity."
+    );
+    parts.push("");
+  }
+
+  // == INDUSTRY BENCHMARKS ==
+  if (typeContext) {
+    parts.push("== INDUSTRY BENCHMARKS ==");
+    parts.push(`For ${typeContext.label} operations:`);
+    parts.push(`Benchmarks: ${typeContext.benchmarks}`);
+    parts.push(`Common Strategies: ${typeContext.strategies}`);
+    parts.push("");
+  }
+
+  // == OPERATOR CONTEXT ==
+  if (profile?.userContext && profile.userContext.length > 0) {
+    parts.push("== OPERATOR CONTEXT ==");
+    parts.push(
+      "These are facts from the restaurant operator. Treat as ground truth. They override any assumptions:"
+    );
+    for (const context of profile.userContext) {
+      parts.push(`- ${context}`);
+    }
+    parts.push("");
+  }
+
+  // == DATA FACTS ==
+  const dataFacts = profile?.dataFacts || {};
+  if (Object.keys(dataFacts).length > 0) {
+    parts.push("== DATA FACTS (Auto-calculated from POS) ==");
+    if (dataFacts.avgMonthlyRevenue) {
+      parts.push(`Average Monthly Revenue: $${dataFacts.avgMonthlyRevenue.toLocaleString()}`);
+    }
+    if (dataFacts.avgDailyRevenue) {
+      parts.push(`Average Daily Revenue: $${dataFacts.avgDailyRevenue.toLocaleString()}`);
+    }
+    if (dataFacts.avgCheck) {
+      parts.push(`Average Check: $${dataFacts.avgCheck.toFixed(2)}`);
+    }
+    if (dataFacts.totalOrders) {
+      parts.push(`Total Orders (period): ${dataFacts.totalOrders.toLocaleString()}`);
+    }
+    if (dataFacts.avgDailyOrders) {
+      parts.push(`Average Daily Orders: ${dataFacts.avgDailyOrders}`);
+    }
+    if (dataFacts.peakDays && dataFacts.peakDays.length > 0) {
+      parts.push(`Peak Days: ${dataFacts.peakDays.join(", ")}`);
+    }
+    if (dataFacts.weakestDays && dataFacts.weakestDays.length > 0) {
+      parts.push(`Weakest Days: ${dataFacts.weakestDays.join(", ")}`);
+    }
+    if (dataFacts.revenueMix) {
+      const mix = dataFacts.revenueMix;
+      const mixStr = Object.entries(mix)
+        .filter(([, v]) => v && v > 0)
+        .map(([k, v]) => `${k}: ${v}%`)
+        .join(", ");
+      if (mixStr) {
+        parts.push(`Revenue Mix: ${mixStr}`);
+      }
+    }
+    if (dataFacts.monthOverMonthGrowth !== undefined) {
+      const growthStr =
+        dataFacts.monthOverMonthGrowth >= 0
+          ? `+${dataFacts.monthOverMonthGrowth}%`
+          : `${dataFacts.monthOverMonthGrowth}%`;
+      parts.push(`Month-over-Month Growth: ${growthStr}`);
+    }
+    if (dataFacts.seasonalPeak) {
+      parts.push(`Seasonal Peak: ${dataFacts.seasonalPeak}`);
+    }
+    parts.push("");
+  }
+
+  // == CURRENT PERIOD DATA ==
+  if (request.salesData) {
+    parts.push("== CURRENT SALES DATA ==");
+    parts.push(`Period: ${request.salesData.months} months of data`);
+    parts.push(`Total Revenue: $${request.salesData.totalRevenue.toLocaleString()}`);
+    parts.push(`Average Daily Revenue: $${request.salesData.avgDailyRevenue.toLocaleString()}`);
+    parts.push(`Total Transactions: ${request.salesData.transactionCount.toLocaleString()}`);
+    parts.push(`Average Check Size: $${request.salesData.avgCheckSize.toFixed(2)}`);
+    parts.push(`Revenue Trend: ${request.salesData.trend}`);
+    if (request.salesData.topDays.length > 0) {
+      parts.push(
+        `Best Days: ${request.salesData.topDays.map((d) => `${d.day} ($${d.revenue.toLocaleString()})`).join(", ")}`
+      );
+    }
+    if (request.salesData.slowDays.length > 0) {
+      parts.push(
+        `Slowest Days: ${request.salesData.slowDays.map((d) => `${d.day} ($${d.revenue.toLocaleString()})`).join(", ")}`
+      );
+    }
+    parts.push("");
+  }
+
+  if (request.costData) {
+    parts.push("== COST DATA ==");
+    parts.push(`Period: ${request.costData.months} months of data`);
+    parts.push(`Total Operating Costs: $${request.costData.totalCosts.toLocaleString()}`);
+    parts.push(`Labor Cost %: ${request.costData.laborPercent.toFixed(1)}%`);
+    parts.push(`Food Cost %: ${request.costData.foodPercent.toFixed(1)}%`);
+    parts.push(`Prime Cost (Labor + Food): ${request.costData.primeCost.toFixed(1)}%`);
+    parts.push(`Cost Trend: ${request.costData.trend}`);
+    parts.push("");
+  }
+
+  // == PREVIOUS INSIGHTS ==
+  if (request.previousInsights && request.previousInsights.length > 0) {
+    parts.push("== PREVIOUS INSIGHTS ==");
+    parts.push("Do NOT repeat these. Generate new, different insights:");
+    for (const insight of request.previousInsights.slice(0, 5)) {
+      const title = insight.title || "Untitled";
+      const summary = insight.content.slice(0, 100);
+      parts.push(`- ${title}: ${summary}...`);
+    }
+    parts.push("");
+  }
+
+  // == FEEDBACK ON PREVIOUS INSIGHTS ==
+  if (request.feedbackRecords && request.feedbackRecords.length > 0) {
+    const negativeFeedback = request.feedbackRecords.filter(
+      (f) => f.rating === "not_helpful" || f.rating === "incorrect"
+    );
+    if (negativeFeedback.length > 0) {
+      parts.push("== FEEDBACK ON PREVIOUS INSIGHTS ==");
+      parts.push(
+        "Do not suggest ideas similar to insights marked not_helpful or incorrect. Learn from this feedback:"
+      );
+      for (const fb of negativeFeedback.slice(0, 5)) {
+        const title = fb.insightTitle || "Insight";
+        parts.push(`- "${title}" was marked ${fb.rating}`);
+        if (fb.userComment) {
+          parts.push(`  Reason: ${fb.userComment}`);
+        }
+      }
+      parts.push("");
+    }
+  }
+
+  // == TASK ==
+  parts.push("== TASK ==");
+  parts.push("Generate exactly 3 NEW insights that are:");
+  parts.push(`1. Specific to THIS restaurant (use actual numbers from ${request.locationName}'s data)`);
+  if (typeContext && profile?.conceptDescription) {
+    parts.push(
+      `2. Appropriate for a ${typeContext.label} operation with a "${profile.conceptDescription}" identity`
+    );
+  } else if (typeContext) {
+    parts.push(`2. Appropriate for a ${typeContext.label} operation`);
+  } else {
+    parts.push("2. Appropriate for this restaurant's operations");
+  }
+  parts.push("3. Actionable — each should have a clear, implementable recommendation");
+  parts.push("4. Respectful of operator context (don't contradict what they've told you)");
+  parts.push("5. Different from previous insights and responsive to any negative feedback");
+  parts.push(
+    "6. For the last insight, identify something you cannot fully explain with current data and suggest which additional data source would help"
+  );
+  parts.push("");
+  parts.push("Return as JSON with: title, summary, insights (array of 3), recommendations (array), dataQuality");
+
+  return parts.join("\n");
 }
 
 export async function generateIntelligence(
   request: IntelligenceRequest
 ): Promise<IntelligenceResponse> {
-  const userPrompt = buildUserPrompt(request);
-  const systemPrompt = buildSystemPrompt(request.restaurantType);
+  // Load restaurant context if not already provided
+  let enhancedRequest = { ...request };
+
+  if (!request.profile && request.locationId) {
+    const context = await loadRestaurantContext(request.locationId);
+    enhancedRequest = {
+      ...request,
+      profile: context.profile,
+      previousInsights: context.previousInsights,
+      feedbackRecords: context.feedbackRecords,
+    };
+
+    // If profile has no data facts or they're stale, calculate them
+    if (
+      !context.profile?.dataFacts ||
+      Object.keys(context.profile.dataFacts).length === 0 ||
+      !context.profile.factsUpdatedAt ||
+      Date.now() - new Date(context.profile.factsUpdatedAt).getTime() > 24 * 60 * 60 * 1000
+    ) {
+      const facts = await calculateDataFacts(request.locationId);
+      if (enhancedRequest.profile) {
+        enhancedRequest.profile.dataFacts = facts;
+      } else {
+        enhancedRequest.profile = {
+          id: "",
+          locationId: request.locationId,
+          selectedDescriptors: [],
+          userContext: [],
+          dataFacts: facts,
+        };
+      }
+    }
+  }
+
+  const userPrompt = buildUserPrompt(enhancedRequest);
+  const systemPrompt = buildSystemPrompt();
+
+  // Log the prompt for debugging (remove in production)
+  if (process.env.NODE_ENV === "development") {
+    console.log("[Claude] === FULL PROMPT ===");
+    console.log(userPrompt);
+    console.log("[Claude] === END PROMPT ===");
+  }
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-5-20250929",
-    max_tokens: 1024,
+    max_tokens: 1500,
     messages: [
       {
         role: "user",
@@ -194,12 +707,12 @@ export async function generateIntelligence(
     // Strip markdown code block formatting if present
     let jsonText = textContent.text.trim();
     if (jsonText.startsWith("```json")) {
-      jsonText = jsonText.slice(7); // Remove ```json
+      jsonText = jsonText.slice(7);
     } else if (jsonText.startsWith("```")) {
-      jsonText = jsonText.slice(3); // Remove ```
+      jsonText = jsonText.slice(3);
     }
     if (jsonText.endsWith("```")) {
-      jsonText = jsonText.slice(0, -3); // Remove trailing ```
+      jsonText = jsonText.slice(0, -3);
     }
     jsonText = jsonText.trim();
 
@@ -215,87 +728,6 @@ export async function generateIntelligence(
       dataQuality: "limited",
     };
   }
-}
-
-function buildUserPrompt(request: IntelligenceRequest): string {
-  const parts: string[] = [];
-  const typeContext = request.restaurantType ? RESTAURANT_TYPE_CONTEXT[request.restaurantType] : null;
-
-  // Restaurant profile section
-  parts.push("## Restaurant Profile");
-  parts.push(`- Name: ${request.locationName}`);
-  if (typeContext) {
-    parts.push(`- Type: ${typeContext.label}`);
-  }
-  if (request.city || request.state) {
-    const location = [request.city, request.state].filter(Boolean).join(", ");
-    parts.push(`- Location: ${location}`);
-  }
-  if (typeContext) {
-    parts.push(`- Industry Benchmarks: ${typeContext.benchmarks}`);
-    parts.push(`- Typical Strategies: ${typeContext.strategies}`);
-  }
-  parts.push("");
-
-  parts.push(`Analyze the following data for ${request.locationName}:`);
-  parts.push("");
-
-  if (request.salesData) {
-    parts.push("## Sales Data (from POS)");
-    parts.push(`- Period: ${request.salesData.months} months of data`);
-    parts.push(
-      `- Total Revenue: $${request.salesData.totalRevenue.toLocaleString()}`
-    );
-    parts.push(
-      `- Average Daily Revenue: $${request.salesData.avgDailyRevenue.toLocaleString()}`
-    );
-    parts.push(
-      `- Total Transactions: ${request.salesData.transactionCount.toLocaleString()}`
-    );
-    parts.push(
-      `- Average Check Size: $${request.salesData.avgCheckSize.toFixed(2)}`
-    );
-    parts.push(`- Revenue Trend: ${request.salesData.trend}`);
-
-    if (request.salesData.topDays.length > 0) {
-      parts.push(
-        `- Best Days: ${request.salesData.topDays.map((d) => `${d.day} ($${d.revenue.toLocaleString()})`).join(", ")}`
-      );
-    }
-    if (request.salesData.slowDays.length > 0) {
-      parts.push(
-        `- Slowest Days: ${request.salesData.slowDays.map((d) => `${d.day} ($${d.revenue.toLocaleString()})`).join(", ")}`
-      );
-    }
-    parts.push("");
-  }
-
-  if (request.costData) {
-    parts.push("## Cost Data (from Accounting)");
-    parts.push(`- Period: ${request.costData.months} months of data`);
-    parts.push(
-      `- Total Operating Costs: $${request.costData.totalCosts.toLocaleString()}`
-    );
-    parts.push(`- Labor Cost %: ${request.costData.laborPercent.toFixed(1)}%`);
-    parts.push(`- Food Cost %: ${request.costData.foodPercent.toFixed(1)}%`);
-    parts.push(
-      `- Prime Cost (Labor + Food): ${request.costData.primeCost.toFixed(1)}%`
-    );
-    parts.push(`- Cost Trend: ${request.costData.trend}`);
-    parts.push("");
-  }
-
-  if (typeContext) {
-    parts.push(
-      `Provide your analysis focusing on actionable insights for this ${typeContext.label} restaurant. Use the industry benchmarks to compare their performance and make recommendations that are SPECIFIC to a ${typeContext.label} operation. Reference industry standards where relevant.`
-    );
-  } else {
-    parts.push(
-      "Provide your analysis focusing on actionable insights for this restaurant."
-    );
-  }
-
-  return parts.join("\n");
 }
 
 /**

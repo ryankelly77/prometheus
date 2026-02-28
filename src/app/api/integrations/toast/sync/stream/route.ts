@@ -6,6 +6,7 @@ export const maxDuration = 300;
 import prisma from "@/lib/prisma";
 import { createToastClient } from "@/lib/integrations/toast/client";
 import { getToastConfig } from "@/lib/integrations/toast/auth";
+import { updateDataFacts } from "@/lib/ai/claude";
 import {
   aggregateOrdersByDaypart,
   mapDaypartAggregatesToPrisma,
@@ -474,6 +475,16 @@ export async function GET(request: NextRequest) {
         console.log(`[Toast Sync]   Voided checks: ${voidRefundStats.voidedChecksCount} ($${voidRefundStats.voidedChecksAmount.toFixed(2)})`);
         console.log(`[Toast Sync]   Voided items:  ${exclusionStats.voidedCount} ($${exclusionStats.voidedAmount.toFixed(2)})`);
         console.log(`[Toast Sync] ===========================================================\n`);
+
+        // Update restaurant profile data facts after sync
+        try {
+          console.log(`[Toast Sync] Calculating data facts for location ${locationId}...`);
+          const facts = await updateDataFacts(locationId);
+          console.log(`[Toast Sync] Data facts updated: avgCheck=$${facts.avgCheck}, avgDaily=$${facts.avgDailyRevenue}`);
+        } catch (factError) {
+          console.error(`[Toast Sync] Failed to update data facts:`, factError);
+          // Non-critical, don't fail the sync
+        }
 
         // Phase 5: Complete
         const syncDurationMs = Date.now() - syncStartTime;

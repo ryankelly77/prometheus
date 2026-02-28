@@ -76,8 +76,9 @@ export async function PATCH(
     }
 
     console.error("Restaurant type update error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to update restaurant type" },
+      { error: "Failed to update restaurant type", details: errorMessage },
       { status: 500 }
     );
   }

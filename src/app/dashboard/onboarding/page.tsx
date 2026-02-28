@@ -9,11 +9,11 @@ import {
   ChevronRight,
   Sparkles,
   TrendingUp,
-  DollarSign,
-  BarChart3,
   Lock,
   Zap,
   ArrowRight,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -21,7 +21,9 @@ import { Progress } from '@/components/ui/progress'
 import { useLocation } from '@/hooks/use-location'
 import { useToast } from '@/hooks/use-toast'
 import { ToastConnectModal } from '@/components/settings/toast-connect-modal'
+import { DescriptorChecklist } from '@/components/onboarding/descriptor-checklist'
 import { cn } from '@/lib/utils'
+import Link from 'next/link'
 
 // Onboarding steps
 type OnboardingStep =
@@ -31,10 +33,6 @@ type OnboardingStep =
   | 'syncing-pos'
   | 'select-restaurant-type'
   | 'reveal-pos-insights'
-  | 'teaser-accounting'
-  | 'connect-accounting'
-  | 'syncing-accounting'
-  | 'reveal-combined-insights'
   | 'complete'
 
 // Restaurant type options
@@ -85,6 +83,7 @@ interface MonthStatus {
 }
 
 interface Intelligence {
+  id?: string
   title: string
   summary: string
   insights: string[]
@@ -161,9 +160,29 @@ export default function OnboardingPage() {
   const [preCompletedData, setPreCompletedData] = useState<PreCompletedData | null>(null)
   const [selectedRestaurantType, setSelectedRestaurantType] = useState<RestaurantType | null>(null)
   const [isSavingRestaurantType, setIsSavingRestaurantType] = useState(false)
+  const [selectedDescriptors, setSelectedDescriptors] = useState<string[]>([])
+  const [conceptDescription, setConceptDescription] = useState('')
+  const [generatedInsightId, setGeneratedInsightId] = useState<string | null>(null)
+  const [analysisProgress, setAnalysisProgress] = useState(0)
+  const [analysisStage, setAnalysisStage] = useState('')
+  const [insightFeedback, setInsightFeedback] = useState<Record<string, 'up' | 'down' | null>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
+  const descriptorSectionRef = useRef<HTMLDivElement | null>(null)
 
   const locationToUse = currentLocation ?? locations[0]
+
+  // Scroll to descriptor section when restaurant type is selected
+  useEffect(() => {
+    if (selectedRestaurantType && descriptorSectionRef.current && step === 'select-restaurant-type') {
+      // Small delay to allow the descriptor checklist to render
+      setTimeout(() => {
+        descriptorSectionRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        })
+      }, 100)
+    }
+  }, [selectedRestaurantType, step])
 
   // Check onboarding status on mount
   // Pass the selected location from localStorage (set by location dropdown)
@@ -391,6 +410,33 @@ export default function OnboardingPage() {
     }
 
     setIsGeneratingInsights(true)
+    setAnalysisProgress(0)
+    setAnalysisStage('Loading restaurant profile...')
+    setInsightFeedback({}) // Reset feedback for new insights
+
+    // Progress simulation stages
+    const progressStages = [
+      { progress: 15, stage: 'Loading restaurant profile...', delay: 400 },
+      { progress: 30, stage: 'Analyzing sales patterns...', delay: 600 },
+      { progress: 50, stage: 'Identifying trends...', delay: 800 },
+      { progress: 70, stage: 'Generating insights...', delay: 1000 },
+      { progress: 85, stage: 'Preparing recommendations...', delay: 800 },
+    ]
+
+    // Start progress animation
+    let progressInterval: NodeJS.Timeout | null = null
+    let currentStageIndex = 0
+
+    const advanceProgress = () => {
+      if (currentStageIndex < progressStages.length) {
+        const stage = progressStages[currentStageIndex]
+        setAnalysisProgress(stage.progress)
+        setAnalysisStage(stage.stage)
+        currentStageIndex++
+        progressInterval = setTimeout(advanceProgress, stage.delay)
+      }
+    }
+    advanceProgress()
 
     try {
       const response = await fetch('/api/intelligence/generate', {
@@ -402,15 +448,41 @@ export default function OnboardingPage() {
         }),
       })
 
+      // Clear the progress interval
+      if (progressInterval) clearTimeout(progressInterval)
+
       const data = await response.json()
+      console.log('[Onboarding] Intelligence API response:', {
+        status: response.status,
+        success: data.success,
+        hasIntelligence: !!data.intelligence,
+        error: data.error,
+        details: data.details
+      })
 
       if (data.success && data.intelligence) {
+        // Complete the progress
+        setAnalysisProgress(100)
+        setAnalysisStage('Complete!')
+
+        // Small delay to show 100% before showing results
+        await new Promise(resolve => setTimeout(resolve, 300))
+
+        console.log('[Onboarding] Intelligence generated successfully:', data.intelligence.title)
         setPosIntelligence(data.intelligence)
+        // Store insight ID for feedback
+        if (data.insightId) {
+          setGeneratedInsightId(data.insightId)
+        }
       } else {
-        throw new Error(data.error || 'Failed to generate insights')
+        console.error('[Onboarding] Intelligence API error:', data.error, data.details)
+        throw new Error(data.details || data.error || 'Failed to generate insights')
       }
     } catch (error) {
-      console.error('Failed to generate insights:', error)
+      // Clear the progress interval on error
+      if (progressInterval) clearTimeout(progressInterval)
+
+      console.error('[Onboarding] Failed to generate insights:', error)
       // Set fallback insight
       setPosIntelligence({
         title: 'Sales Analysis Complete',
@@ -424,7 +496,7 @@ export default function OnboardingPage() {
     }
   }, [locationId, locationToUse?.id])
 
-  // Save restaurant type and proceed to insights
+  // Save restaurant type, profile, and proceed to insights
   const saveRestaurantTypeAndContinue = async () => {
     if (!selectedRestaurantType) {
       toast({
@@ -444,14 +516,59 @@ export default function OnboardingPage() {
     setIsSavingRestaurantType(true)
 
     try {
-      const response = await fetch(`/api/locations/${locId}/restaurant-type`, {
+      // Save restaurant type
+      console.log('[Onboarding] Saving restaurant type for location:', locId, 'type:', selectedRestaurantType)
+      const typeResponse = await fetch(`/api/locations/${locId}/restaurant-type`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ restaurantType: selectedRestaurantType }),
       })
 
-      if (!response.ok) {
-        throw new Error('Failed to save restaurant type')
+      if (!typeResponse.ok) {
+        const responseText = await typeResponse.text()
+        console.error('[Onboarding] Failed to save restaurant type:', {
+          status: typeResponse.status,
+          statusText: typeResponse.statusText,
+          locationId: locId,
+          restaurantType: selectedRestaurantType,
+          responseBody: responseText,
+        })
+        let errorMessage = 'Failed to save restaurant type'
+        try {
+          const errorData = JSON.parse(responseText)
+          errorMessage = errorData.error || errorMessage
+        } catch {
+          // Response wasn't JSON
+        }
+        throw new Error(errorMessage)
+      }
+
+      // Save restaurant profile with descriptors
+      console.log('[Onboarding] Saving profile with:', {
+        locationId: locId,
+        restaurantType: selectedRestaurantType,
+        conceptDescription: conceptDescription || undefined,
+        selectedDescriptors,
+        descriptorCount: selectedDescriptors.length,
+      })
+
+      const profileResponse = await fetch('/api/restaurant/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          locationId: locId,
+          restaurantType: selectedRestaurantType,
+          conceptDescription: conceptDescription || undefined,
+          selectedDescriptors,
+        }),
+      })
+
+      if (!profileResponse.ok) {
+        const errorData = await profileResponse.json().catch(() => ({}))
+        console.error('[Onboarding] Failed to save restaurant profile:', errorData)
+      } else {
+        const profileData = await profileResponse.json()
+        console.log('[Onboarding] Profile saved successfully:', profileData)
       }
 
       // Add to completed steps
@@ -475,20 +592,70 @@ export default function OnboardingPage() {
     }
   }
 
-  // Mark onboarding as complete
+  // Mark onboarding as complete and go to dashboard
   const markOnboardingComplete = async () => {
-    if (integrationId) {
-      await fetch('/api/integrations/toast/onboarding-progress', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          integrationId,
-          syncedMonths: preCompletedData?.syncedMonths ?? 7,
-          step: 6, // Final step
-        }),
-      }).catch(() => {})
+    const locId = locationId ?? locationToUse?.id
+
+    try {
+      // Try to use stored integrationId, otherwise look it up via location API
+      let intId = integrationId
+
+      if (!intId && locId) {
+        // Fetch integration ID from location data
+        console.log('[Onboarding] Looking up integrationId for location:', locId)
+        const statusRes = await fetch(`/api/onboarding/status?locationId=${locId}`)
+        const statusData = await statusRes.json()
+        if (statusData.integrationId) {
+          intId = statusData.integrationId
+          console.log('[Onboarding] Found integrationId:', intId)
+        }
+      }
+
+      if (intId) {
+        console.log('[Onboarding] Marking complete with integrationId:', intId)
+        const response = await fetch('/api/integrations/toast/onboarding-progress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            integrationId: intId,
+            syncedMonths: preCompletedData?.syncedMonths ?? 7,
+            step: 6, // Final step - sets onboardingCompletedAt
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.error('[Onboarding] Failed to mark complete:', errorText)
+          toast({
+            title: 'Error completing onboarding',
+            description: 'Please try again.',
+            variant: 'destructive',
+          })
+          return // Don't redirect if failed
+        }
+
+        console.log('[Onboarding] Successfully marked complete')
+      } else {
+        console.error('[Onboarding] No integrationId available, cannot mark complete')
+        toast({
+          title: 'Error completing onboarding',
+          description: 'Could not find integration. Please try again.',
+          variant: 'destructive',
+        })
+        return // Don't redirect if no integrationId
+      }
+    } catch (error) {
+      console.error('[Onboarding] Error marking complete:', error)
+      toast({
+        title: 'Error completing onboarding',
+        description: 'Please try again.',
+        variant: 'destructive',
+      })
+      return // Don't redirect on error
     }
-    setStep('complete')
+
+    // Only redirect after successful completion
+    router.push('/dashboard')
   }
 
   const formatCurrency = (value: number) => {
@@ -523,14 +690,14 @@ export default function OnboardingPage() {
     <div className="container max-w-3xl py-8 space-y-8">
       {/* Progress indicator */}
       <div className="flex items-center justify-center gap-2">
-        {['connect-pos', 'syncing-pos', 'select-restaurant-type', 'reveal-pos-insights', 'teaser-accounting'].map((s, i) => (
+        {['connect-pos', 'syncing-pos', 'select-restaurant-type', 'reveal-pos-insights'].map((s, i) => (
           <div
             key={s}
             className={cn(
               'h-2 w-12 rounded-full transition-colors',
               completedSteps.includes(s) || step === s || (['welcome', 'connect-pos'].includes(step) && i === 0)
                 ? 'bg-primary'
-                : i < ['connect-pos', 'syncing-pos', 'select-restaurant-type', 'reveal-pos-insights', 'teaser-accounting'].indexOf(step)
+                : i < ['connect-pos', 'syncing-pos', 'select-restaurant-type', 'reveal-pos-insights'].indexOf(step)
                   ? 'bg-primary'
                   : 'bg-muted'
             )}
@@ -802,7 +969,14 @@ export default function OnboardingPage() {
                       ? 'border-primary bg-primary/5 ring-2 ring-primary ring-offset-2'
                       : 'hover:bg-muted/50'
                   )}
-                  onClick={() => setSelectedRestaurantType(type.value)}
+                  onClick={() => {
+                    // Reset descriptors when changing restaurant type
+                    if (selectedRestaurantType !== type.value) {
+                      setSelectedDescriptors([])
+                      setConceptDescription('')
+                    }
+                    setSelectedRestaurantType(type.value)
+                  }}
                 >
                   <CardContent className="flex flex-col items-center justify-center p-4 text-center">
                     <span className="text-2xl mb-1">{type.emoji}</span>
@@ -819,6 +993,27 @@ export default function OnboardingPage() {
                 </Card>
               ))}
             </div>
+
+            {/* Descriptor Checklist - shown after type selection */}
+            {selectedRestaurantType && (
+              <Card ref={descriptorSectionRef} className="mt-6">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg">Tell us more about your concept</CardTitle>
+                  <CardDescription>
+                    This helps us provide more relevant insights (optional, takes 30 seconds)
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <DescriptorChecklist
+                    restaurantType={selectedRestaurantType}
+                    selectedDescriptors={selectedDescriptors}
+                    onDescriptorsChange={setSelectedDescriptors}
+                    conceptDescription={conceptDescription}
+                    onConceptDescriptionChange={setConceptDescription}
+                  />
+                </CardContent>
+              </Card>
+            )}
 
             <Button
               size="lg"
@@ -883,9 +1078,18 @@ export default function OnboardingPage() {
 
             {isGeneratingInsights && (
               <Card>
-                <CardContent className="py-12 flex flex-col items-center gap-4">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  <p className="text-muted-foreground">Analyzing your data with AI...</p>
+                <CardContent className="py-8 space-y-6">
+                  <div className="text-center space-y-2">
+                    <Sparkles className="h-8 w-8 text-primary mx-auto animate-pulse" />
+                    <h3 className="font-semibold">Analyzing Your Data</h3>
+                    <p className="text-sm text-muted-foreground">{analysisStage}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Progress value={analysisProgress} className="h-2" />
+                    <p className="text-xs text-muted-foreground text-center tabular-nums">
+                      {analysisProgress}% complete
+                    </p>
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -912,123 +1116,235 @@ export default function OnboardingPage() {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div>
-                      <h4 className="text-sm font-semibold mb-2">Key Insights</h4>
-                      <ul className="space-y-2">
-                        {posIntelligence.insights.map((insight, i) => (
-                          <li key={i} className="flex items-start gap-2 text-sm">
-                            <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
-                            <span>{insight}</span>
-                          </li>
-                        ))}
+                      <h4 className="text-sm font-semibold mb-3">Key Insights</h4>
+                      <ul className="space-y-3">
+                        {posIntelligence.insights.map((insight, i) => {
+                          const feedbackKey = `insight-${i}`
+                          const feedback = insightFeedback[feedbackKey]
+                          return (
+                            <li key={i} className="rounded-lg border p-3 space-y-2">
+                              <div className="flex items-start gap-2 text-sm">
+                                <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                                <span className="flex-1">{insight}</span>
+                              </div>
+                              <div className="flex items-center gap-2 pl-6">
+                                <span className="text-xs text-muted-foreground">Helpful?</span>
+                                <button
+                                  onClick={() => setInsightFeedback(prev => ({ ...prev, [feedbackKey]: 'up' }))}
+                                  className={cn(
+                                    'p-1.5 rounded-md transition-colors',
+                                    feedback === 'up'
+                                      ? 'bg-green-100 text-green-600 dark:bg-green-900/30'
+                                      : 'hover:bg-muted text-muted-foreground'
+                                  )}
+                                >
+                                  <ThumbsUp className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => setInsightFeedback(prev => ({ ...prev, [feedbackKey]: 'down' }))}
+                                  className={cn(
+                                    'p-1.5 rounded-md transition-colors',
+                                    feedback === 'down'
+                                      ? 'bg-red-100 text-red-600 dark:bg-red-900/30'
+                                      : 'hover:bg-muted text-muted-foreground'
+                                  )}
+                                >
+                                  <ThumbsDown className="h-3.5 w-3.5" />
+                                </button>
+                                {feedback && (
+                                  <span className="text-xs text-muted-foreground ml-1">
+                                    {feedback === 'up' ? 'Thanks!' : 'Noted'}
+                                  </span>
+                                )}
+                                {feedback && (
+                                  <Link
+                                    href="/dashboard/settings/intelligence"
+                                    className="text-xs text-primary hover:underline ml-2"
+                                  >
+                                    Add to Profile
+                                  </Link>
+                                )}
+                              </div>
+                            </li>
+                          )
+                        })}
                       </ul>
                     </div>
                     {posIntelligence.recommendations.length > 0 && (
                       <div>
-                        <h4 className="text-sm font-semibold mb-2">Recommendations</h4>
-                        <ul className="space-y-2">
-                          {posIntelligence.recommendations.map((rec, i) => (
-                            <li key={i} className="flex items-start gap-2 text-sm">
-                              <Zap className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                              <span>{rec}</span>
-                            </li>
-                          ))}
+                        <h4 className="text-sm font-semibold mb-3">Recommendations</h4>
+                        <ul className="space-y-3">
+                          {posIntelligence.recommendations.map((rec, i) => {
+                            const feedbackKey = `rec-${i}`
+                            const feedback = insightFeedback[feedbackKey]
+                            return (
+                              <li key={i} className="rounded-lg border p-3 space-y-2">
+                                <div className="flex items-start gap-2 text-sm">
+                                  <Zap className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                                  <span className="flex-1">{rec}</span>
+                                </div>
+                                <div className="flex items-center gap-2 pl-6">
+                                  <span className="text-xs text-muted-foreground">Helpful?</span>
+                                  <button
+                                    onClick={() => setInsightFeedback(prev => ({ ...prev, [feedbackKey]: 'up' }))}
+                                    className={cn(
+                                      'p-1.5 rounded-md transition-colors',
+                                      feedback === 'up'
+                                        ? 'bg-green-100 text-green-600 dark:bg-green-900/30'
+                                        : 'hover:bg-muted text-muted-foreground'
+                                    )}
+                                  >
+                                    <ThumbsUp className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => setInsightFeedback(prev => ({ ...prev, [feedbackKey]: 'down' }))}
+                                    className={cn(
+                                      'p-1.5 rounded-md transition-colors',
+                                      feedback === 'down'
+                                        ? 'bg-red-100 text-red-600 dark:bg-red-900/30'
+                                        : 'hover:bg-muted text-muted-foreground'
+                                    )}
+                                  >
+                                    <ThumbsDown className="h-3.5 w-3.5" />
+                                  </button>
+                                  {feedback && (
+                                    <span className="text-xs text-muted-foreground ml-1">
+                                      {feedback === 'up' ? 'Thanks!' : 'Noted'}
+                                    </span>
+                                  )}
+                                  {feedback && (
+                                    <Link
+                                      href="/dashboard/settings/intelligence"
+                                      className="text-xs text-primary hover:underline ml-2"
+                                    >
+                                      Add to Profile
+                                    </Link>
+                                  )}
+                                </div>
+                              </li>
+                            )
+                          })}
                         </ul>
                       </div>
                     )}
                   </CardContent>
                 </Card>
 
-                <Button size="lg" className="w-full" onClick={() => setStep('teaser-accounting')}>
-                  Continue
+                {/* Intelligence Sources Section */}
+                <div className="pt-6 border-t space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-primary" />
+                    <h3 className="font-semibold">Make Prometheus Smarter</h3>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Each data source unlocks deeper intelligence. Enable what matters to you.
+                  </p>
+
+                  <div className="space-y-2">
+                    {/* Weather Intelligence - Ready */}
+                    <Card className="border-primary/30 bg-primary/5">
+                      <CardContent className="flex items-center gap-4 p-4">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                          <span className="text-xl">🌤️</span>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium">Weather Intelligence</p>
+                          <p className="text-xs text-muted-foreground">Explain anomalies · Predict slow days</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                          onClick={() => {
+                            toast({
+                              title: "Coming Soon",
+                              description: "Weather intelligence will be available in the next update.",
+                            })
+                          }}
+                        >
+                          Enable
+                        </Button>
+                      </CardContent>
+                    </Card>
+
+                    {/* Local Events - Coming Soon */}
+                    <Card className="opacity-60">
+                      <CardContent className="flex items-center gap-4 p-4">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                          <span className="text-xl">🎪</span>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-muted-foreground">Local Events</p>
+                          <p className="text-xs text-muted-foreground">Spurs games · Concerts · Festivals</p>
+                        </div>
+                        <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">Coming Soon</span>
+                      </CardContent>
+                    </Card>
+
+                    {/* Accounting / Costs - Coming Soon */}
+                    <Card className="opacity-60">
+                      <CardContent className="flex items-center gap-4 p-4">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                          <span className="text-xl">💰</span>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-muted-foreground">Accounting / Costs</p>
+                          <p className="text-xs text-muted-foreground">Margins · Food cost · Profit analysis</p>
+                        </div>
+                        <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">Coming Soon</span>
+                      </CardContent>
+                    </Card>
+
+                    {/* Reservations / Customers - Coming Soon */}
+                    <Card className="opacity-60">
+                      <CardContent className="flex items-center gap-4 p-4">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                          <span className="text-xl">👥</span>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-muted-foreground">Reservations / Customers</p>
+                          <p className="text-xs text-muted-foreground">OpenTable · Resy · Tock</p>
+                        </div>
+                        <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">Coming Soon</span>
+                      </CardContent>
+                    </Card>
+
+                    {/* Social Media - Coming Soon */}
+                    <Card className="opacity-60">
+                      <CardContent className="flex items-center gap-4 p-4">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                          <span className="text-xl">📱</span>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-muted-foreground">Social Media</p>
+                          <p className="text-xs text-muted-foreground">Instagram · Facebook · Google Reviews</p>
+                        </div>
+                        <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">Coming Soon</span>
+                      </CardContent>
+                    </Card>
+
+                    {/* Visibility / SEO - Coming Soon */}
+                    <Card className="opacity-60">
+                      <CardContent className="flex items-center gap-4 p-4">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                          <span className="text-xl">🔍</span>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-muted-foreground">Visibility / SEO</p>
+                          <p className="text-xs text-muted-foreground">Search rankings · Online presence</p>
+                        </div>
+                        <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">Coming Soon</span>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+
+                <Button size="lg" className="w-full" onClick={markOnboardingComplete}>
+                  Go to Dashboard
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </>
             )}
-          </motion.div>
-        )}
-
-        {/* Teaser Accounting Step */}
-        {step === 'teaser-accounting' && (
-          <motion.div
-            key="teaser-accounting"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="space-y-6"
-          >
-            <div className="text-center space-y-2">
-              <h1 className="text-2xl font-bold">Unlock Deeper Insights</h1>
-              <p className="text-muted-foreground">
-                Connect your accounting system to reveal profit analysis
-              </p>
-            </div>
-
-            {/* Mystery card showing locked insights */}
-            <Card className="border-dashed border-2 bg-muted/30">
-              <CardContent className="py-8 space-y-4">
-                <div className="flex items-center justify-center gap-4 opacity-50">
-                  <div className="rounded-lg bg-muted p-4">
-                    <DollarSign className="h-8 w-8" />
-                  </div>
-                  <div className="rounded-lg bg-muted p-4">
-                    <BarChart3 className="h-8 w-8" />
-                  </div>
-                </div>
-                <div className="text-center space-y-2">
-                  <div className="flex items-center justify-center gap-2">
-                    <Lock className="h-4 w-4 text-muted-foreground" />
-                    <p className="font-medium text-muted-foreground">Premium Intelligence Locked</p>
-                  </div>
-                  <ul className="text-sm text-muted-foreground space-y-1">
-                    <li>Prime cost analysis & benchmarks</li>
-                    <li>Labor efficiency by daypart</li>
-                    <li>Food cost variance tracking</li>
-                    <li>Profit optimization recommendations</li>
-                  </ul>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card
-              className="cursor-pointer hover:border-primary/50 transition-colors"
-              onClick={() => {
-                toast({
-                  title: "Coming Soon",
-                  description: "R365 integration will be available during your onboarding session.",
-                })
-              }}
-            >
-              <CardContent className="flex items-center gap-4 p-6">
-                <img src="/integrations/r365.svg" alt="R365" className="h-12 w-12" />
-                <div className="flex-1">
-                  <h3 className="font-semibold">Restaurant365</h3>
-                  <p className="text-sm text-muted-foreground">Connect to unlock cost insights</p>
-                </div>
-                <ChevronRight className="h-5 w-5 text-muted-foreground" />
-              </CardContent>
-            </Card>
-
-            <div className="flex gap-3">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={markOnboardingComplete}
-              >
-                Skip for Now
-              </Button>
-              <Button
-                className="flex-1"
-                onClick={() => {
-                  toast({
-                    title: "Coming Soon",
-                    description: "We'll help you connect R365 during your onboarding session.",
-                  })
-                  markOnboardingComplete()
-                }}
-              >
-                Connect Accounting
-              </Button>
-            </div>
           </motion.div>
         )}
 

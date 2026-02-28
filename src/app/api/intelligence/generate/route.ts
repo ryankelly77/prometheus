@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
 
     // Build the intelligence request based on available data
     const intelligenceRequest: IntelligenceRequest = {
+      locationId,
       locationName: location.name,
       dataType,
       restaurantType: location.restaurantType as RestaurantType | null,
@@ -92,7 +93,54 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate intelligence
-    const intelligence = await generateIntelligence(intelligenceRequest);
+    console.log("[Intelligence] Generating insights for location:", locationId, "dataType:", dataType);
+    console.log("[Intelligence] Sales data available:", !!intelligenceRequest.salesData);
+    console.log("[Intelligence] Restaurant type:", intelligenceRequest.restaurantType);
+
+    let intelligence;
+    try {
+      intelligence = await generateIntelligence(intelligenceRequest);
+      console.log("[Intelligence] Successfully generated:", intelligence.title);
+    } catch (aiError) {
+      console.error("[Intelligence] Claude API error:", aiError);
+      throw aiError;
+    }
+
+    // Store the insight in the database for feedback tracking
+    // First, ensure we have a prompt record for onboarding
+    const promptSlug = `onboarding-${dataType}`;
+    const prompt = await prisma.aIPrompt.upsert({
+      where: { id: promptSlug },
+      create: {
+        id: promptSlug,
+        organizationId: location.restaurantGroup.organizationId,
+        name: `Onboarding ${dataType.toUpperCase()} Analysis`,
+        slug: promptSlug,
+        systemPrompt: "You are a restaurant analytics expert.",
+        userPromptTemplate: "Analyze the provided data and generate insights.",
+        category: "METRIC_ANALYSIS",
+        version: 1,
+        isActive: true,
+      },
+      update: {},
+    });
+
+    const aiInsight = await prisma.aIInsight.create({
+      data: {
+        locationId,
+        promptId: prompt.id,
+        periodType: "MONTHLY",
+        periodStart: new Date(new Date().setMonth(new Date().getMonth() - 7)),
+        periodEnd: new Date(),
+        inputData: intelligenceRequest as object,
+        title: intelligence.title,
+        content: intelligence.summary,
+        keyPoints: intelligence.insights,
+        recommendations: intelligence.recommendations as object,
+        model: "claude-3-5-sonnet-20241022",
+        promptVersion: 1,
+      },
+    });
 
     // Update onboarding state
     await updateOnboardingState(locationId, dataType);
@@ -100,6 +148,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       intelligence,
+      insightId: aiInsight.id,
       dataType,
       locationName: location.name,
     });
@@ -112,8 +161,11 @@ export async function POST(request: NextRequest) {
     }
 
     console.error("Intelligence generation error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    console.error("[Intelligence] Error details:", { message: errorMessage, stack: errorStack });
     return NextResponse.json(
-      { error: "Failed to generate intelligence" },
+      { error: "Failed to generate intelligence", details: errorMessage },
       { status: 500 }
     );
   }
