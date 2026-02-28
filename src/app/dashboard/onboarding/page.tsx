@@ -56,21 +56,22 @@ interface RestaurantTypeOption {
   value: RestaurantType
   label: string
   emoji: string
+  qualifier: string
 }
 
 const RESTAURANT_TYPES: RestaurantTypeOption[] = [
-  { value: 'fine_dining', label: 'Fine Dining', emoji: '🍽️' },
-  { value: 'casual_dining', label: 'Casual Dining', emoji: '🍔' },
-  { value: 'fast_casual', label: 'Fast Casual', emoji: '🥗' },
-  { value: 'quick_service', label: 'Quick Service', emoji: '⚡' },
-  { value: 'cafe', label: 'Café', emoji: '☕' },
-  { value: 'bar_pub', label: 'Bar / Pub', emoji: '🍺' },
-  { value: 'bistro', label: 'Bistro', emoji: '🥘' },
-  { value: 'ethnic_specialty', label: 'Ethnic / Specialty', emoji: '🍲' },
-  { value: 'food_truck', label: 'Food Truck', emoji: '🚚' },
-  { value: 'buffet', label: 'Buffet', emoji: '🍱' },
-  { value: 'family_style', label: 'Family-Style', emoji: '👨‍👩‍👧‍👦' },
-  { value: 'ghost_kitchen', label: 'Ghost Kitchen / Virtual', emoji: '👻' },
+  { value: 'fine_dining', label: 'Fine Dining', emoji: '🍽️', qualifier: 'Avg check $100-300' },
+  { value: 'casual_dining', label: 'Casual Dining', emoji: '🍔', qualifier: 'Avg check $40-80' },
+  { value: 'fast_casual', label: 'Fast Casual', emoji: '🥗', qualifier: 'Avg check $12-25' },
+  { value: 'quick_service', label: 'Quick Service', emoji: '⚡', qualifier: 'Avg check $8-15' },
+  { value: 'cafe', label: 'Café', emoji: '☕', qualifier: 'Beverage-focused' },
+  { value: 'bar_pub', label: 'Bar / Pub', emoji: '🍺', qualifier: '50-70% beverage' },
+  { value: 'bistro', label: 'Bistro', emoji: '🥘', qualifier: 'Avg check $50-100' },
+  { value: 'ethnic_specialty', label: 'Ethnic / Specialty', emoji: '🍲', qualifier: 'Cuisine-focused' },
+  { value: 'food_truck', label: 'Food Truck', emoji: '🚚', qualifier: 'Mobile vendor' },
+  { value: 'buffet', label: 'Buffet', emoji: '🍱', qualifier: 'Fixed price $15-40' },
+  { value: 'family_style', label: 'Family-Style', emoji: '👨‍👩‍👧‍👦', qualifier: 'Avg check $15-35' },
+  { value: 'ghost_kitchen', label: 'Ghost Kitchen / Virtual', emoji: '👻', qualifier: '100% delivery' },
 ]
 
 interface MonthStatus {
@@ -114,6 +115,13 @@ interface PreCompletedData {
   syncedMonths: number
   totalRevenue: number
   daysWithData: number
+  restaurantType?: RestaurantType
+}
+
+// Helper to get restaurant type label
+function getRestaurantTypeLabel(type: RestaurantType): string {
+  const found = RESTAURANT_TYPES.find(t => t.value === type)
+  return found ? `${found.emoji} ${found.label}` : type
 }
 
 // Get 7 months with current month first
@@ -200,11 +208,16 @@ export default function OnboardingPage() {
             syncedMonths: data.syncedMonths ?? 0,
             totalRevenue: data.totalRevenue ?? 0,
             daysWithData: data.daysWithData ?? 0,
+            restaurantType: data.restaurantType ?? undefined,
           })
           setTotalSynced({
             sales: data.totalRevenue ?? 0,
             orders: data.daysWithData ?? 0,
           })
+          // Set selected restaurant type if already chosen
+          if (data.restaurantType) {
+            setSelectedRestaurantType(data.restaurantType as RestaurantType)
+          }
         }
 
         // Set current step based on API response
@@ -444,6 +457,9 @@ export default function OnboardingPage() {
       // Add to completed steps
       setCompletedSteps(prev => [...prev, 'select-restaurant-type'])
 
+      // Update preCompletedData with the restaurant type
+      setPreCompletedData(prev => prev ? { ...prev, restaurantType: selectedRestaurantType } : null)
+
       // Proceed to insights
       setStep('reveal-pos-insights')
       await generatePosInsights()
@@ -550,6 +566,21 @@ export default function OnboardingPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Restaurant Type - Completed (only show on insights step) */}
+          {completedSteps.includes('select-restaurant-type') && preCompletedData.restaurantType && step === 'reveal-pos-insights' && (
+            <Card className="border-green-200 dark:border-green-900 bg-green-50/30 dark:bg-green-950/10">
+              <CardContent className="flex items-center gap-4 p-4">
+                <CheckCircle2 className="h-6 w-6 text-green-600 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium text-green-700 dark:text-green-400">Tell us about your restaurant</p>
+                  <p className="text-sm text-green-600/80 dark:text-green-400/70">
+                    {getRestaurantTypeLabel(preCompletedData.restaurantType)}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -771,12 +802,15 @@ export default function OnboardingPage() {
                   onClick={() => setSelectedRestaurantType(type.value)}
                 >
                   <CardContent className="flex flex-col items-center justify-center p-4 text-center">
-                    <span className="text-2xl mb-2">{type.emoji}</span>
+                    <span className="text-2xl mb-1">{type.emoji}</span>
                     <span className={cn(
                       'text-sm font-medium',
                       selectedRestaurantType === type.value && 'text-primary'
                     )}>
                       {type.label}
+                    </span>
+                    <span className="text-xs text-muted-foreground mt-0.5">
+                      {type.qualifier}
                     </span>
                   </CardContent>
                 </Card>
