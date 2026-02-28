@@ -105,8 +105,47 @@ model Location {
   transactionSummary  TransactionSummary[]
   weatherData         WeatherData[]
   websiteVisibility   WebsiteVisibility[]
+  restaurantProfile   RestaurantProfile?
+  insightFeedback     InsightFeedback[]
 
   @@index([restaurantGroupId])
+}
+
+// Restaurant Intelligence Profile - stores profile data and AI context for insights
+model RestaurantProfile {
+  id                   String    @id @default(cuid())
+  locationId           String    @unique
+  restaurantType       String?   @db.VarChar(50)  // 'fine_dining', 'casual_dining', etc.
+  conceptDescription   String?   @db.Text         // free text, e.g. "French brasserie"
+  cuisineType          String?   @db.VarChar(100) // "French-inspired", "Italian", etc.
+  priceRange           String?   @db.VarChar(20)  // "$", "$$", "$$$", "$$$$"
+  seatingCapacity      Int?
+  neighborhood         String?   @db.VarChar(200)
+  targetDemographic    String?   @db.Text
+  selectedDescriptors  String[]  // array of descriptor IDs for UI state
+  userContext          String[]  // array of context strings for AI prompt
+  dataFacts            Json      @default("{}")   // auto-calculated from POS data
+  factsUpdatedAt       DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  location             Location  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([locationId])
+}
+
+// Insight Feedback - stores user ratings/feedback on AI insights
+model InsightFeedback {
+  id            String    @id @default(cuid())
+  locationId    String
+  insightId     String
+  rating        String    @db.VarChar(20)  // 'helpful', 'not_helpful', 'incorrect'
+  userComment   String?   @db.Text
+  createdAt     DateTime  @default(now())
+  location      Location  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  insight       AIInsight @relation(fields: [insightId], references: [id], onDelete: Cascade)
+
+  @@index([locationId])
+  @@index([insightId])
 }
 
 model UserProfile {
@@ -821,6 +860,7 @@ model AIInsight {
   generatedBy     UserProfile?      @relation(fields: [generatedById], references: [id])
   location        Location          @relation(fields: [locationId], references: [id], onDelete: Cascade)
   prompt          AIPrompt          @relation(fields: [promptId], references: [id])
+  feedback        InsightFeedback[]
 
   @@index([locationId, periodStart])
   @@index([locationId, generatedAt])
