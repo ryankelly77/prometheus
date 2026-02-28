@@ -38,17 +38,24 @@ export async function GET(request: NextRequest) {
     });
 
     if (!location) {
-      // No location - they need to set up the account first
+      console.log("[Onboarding Status] No location found");
       return NextResponse.json({
         needsOnboarding: false,
         reason: "no_location",
       });
     }
 
+    console.log("[Onboarding Status] Location:", location.id, location.name);
+    console.log("[Onboarding Status] Integrations found:", location.integrations.length);
+    location.integrations.forEach((i, idx) => {
+      console.log(`[Onboarding Status] Integration ${idx}:`, i.type, i.status, i.id);
+    });
+
     const posIntegration = location.integrations[0];
 
     // No POS integration at all - needs full onboarding
     if (!posIntegration) {
+      console.log("[Onboarding Status] No POS integration found");
       return NextResponse.json({
         needsOnboarding: true,
         reason: "no_pos_integration",
@@ -60,6 +67,7 @@ export async function GET(request: NextRequest) {
 
     // Has integration but not connected - needs full onboarding
     if (posIntegration.status !== "CONNECTED") {
+      console.log("[Onboarding Status] Integration not connected, status:", posIntegration.status);
       return NextResponse.json({
         needsOnboarding: true,
         reason: "pos_not_connected",
@@ -90,6 +98,12 @@ export async function GET(request: NextRequest) {
 
     const hasSyncedData = syncedData.length > 0 && (syncedData[0]._count.id ?? 0) > 0;
     const totalRevenue = Number(syncedData[0]?._sum.netSales ?? 0);
+
+    console.log("[Onboarding Status] Synced data check:", {
+      hasSyncedData,
+      totalRevenue,
+      recordCount: syncedData[0]?._count.id ?? 0,
+    });
 
     // Get unique months count
     const monthsData = await prisma.transactionSummary.findMany({
