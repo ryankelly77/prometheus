@@ -829,16 +829,24 @@ model AIInsight {
   id              String            @id @default(cuid())
   locationId      String
   promptId        String
+  batchId         String?           // Groups insights from the same generation
+  isCurrent       Boolean           @default(true) // Current batch vs historical
+  layer           String?           @db.VarChar(50) // 'sales', 'weather', 'events', 'costs'
+  insightType     String?           @db.VarChar(30) // 'trend', 'anomaly', 'opportunity', 'recommendation'
   periodType      InsightPeriod
   periodStart     DateTime
   periodEnd       DateTime
   inputData       Json
   title           String?
+  headline        String?           // Short headline for the insight
   content         String
+  detail          String?           @db.Text // Expanded explanation
   contentHtml     String?
   keyPoints       String[]
   metrics         Json?
   recommendations Json?
+  impact          String?           @db.Text // Dollar estimate or impact description
+  recommendation  String?           @db.Text // Specific actionable recommendation
   sentiment       InsightSentiment?
   urgency         InsightUrgency?
   triggerType     InsightTrigger?
@@ -864,6 +872,8 @@ model AIInsight {
 
   @@index([locationId, periodStart])
   @@index([locationId, generatedAt])
+  @@index([locationId, isCurrent])
+  @@index([locationId, batchId])
   @@index([promptId])
   @@index([isRead, isDismissed])
 }

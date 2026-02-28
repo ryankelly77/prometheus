@@ -21,6 +21,7 @@ import {
   ReportResult,
   RecentReports,
   CustomQuestionModal,
+  InsightsPanel,
 } from '@/components/intelligence'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -236,20 +237,46 @@ export default function IntelligencePage() {
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-y-auto">
-          {/* Default State */}
+          {/* Default State - Show Insights Panel */}
           {viewMode === 'default' && !showHistory && (
-            <div className="flex flex-col items-center justify-center h-full text-center py-12">
-              <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/10 mb-4">
-                <Brain className="h-10 w-10 text-primary" />
-              </div>
-              <h2 className="text-xl font-semibold mb-2">Select a Report</h2>
-              <p className="text-muted-foreground max-w-md">
-                Choose a report from the sidebar to get AI-powered analysis and actionable recommendations for your restaurant.
-              </p>
-              {mockRecommendedReports.length > 0 && (
-                <p className="text-sm text-primary mt-4">
-                  We have {mockRecommendedReports.length} recommended reports based on your data
-                </p>
+            <div className="space-y-6">
+              {/* Insights Panel - Real AI-generated insights from DB */}
+              {currentLocation && !isAllLocations && (
+                <InsightsPanel
+                  locationId={currentLocation.id}
+                  locationName={currentLocation.name}
+                />
+              )}
+
+              {/* Message for "All Locations" view */}
+              {isAllLocations && (
+                <div className="flex flex-col items-center justify-center text-center py-12 border rounded-lg bg-muted/30">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 mb-3">
+                    <Brain className="h-7 w-7 text-primary" />
+                  </div>
+                  <h2 className="text-lg font-semibold mb-1">Select a Location</h2>
+                  <p className="text-sm text-muted-foreground max-w-md">
+                    Choose a specific location from the dropdown to view AI-powered insights.
+                  </p>
+                </div>
+              )}
+
+              {/* Prompt to select a report for deeper analysis */}
+              {currentLocation && !isAllLocations && (
+                <div className="flex flex-col items-center justify-center text-center py-8 border rounded-lg bg-muted/30">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 mb-3">
+                    <Brain className="h-7 w-7 text-primary" />
+                  </div>
+                  <h2 className="text-lg font-semibold mb-1">Want a Deeper Analysis?</h2>
+                  <p className="text-sm text-muted-foreground max-w-md">
+                    Select a report from the sidebar to get detailed AI analysis and actionable recommendations.
+                  </p>
+                  {mockRecommendedReports.length > 0 && (
+                    <p className="text-xs text-primary mt-2">
+                      {mockRecommendedReports.length} recommended reports based on your data
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}

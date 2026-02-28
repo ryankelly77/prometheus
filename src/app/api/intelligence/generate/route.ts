@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import prisma from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/require-role";
 import {
@@ -12,13 +13,113 @@ import {
 const requestSchema = z.object({
   locationId: z.string(),
   dataType: z.enum(["pos", "accounting", "combined"]),
+  forceNew: z.boolean().optional().default(false), // Force generating new batch
 });
+
+/**
+ * GET /api/intelligence/generate?locationId=xxx
+ *
+ * Returns current insights for a location without generating new ones.
+ * Used to check if insights exist before deciding to generate.
+ */
+export async function GET(request: NextRequest) {
+  const auth = await requireRole("VIEWER");
+  if (auth instanceof NextResponse) return auth;
+
+  const { searchParams } = new URL(request.url);
+  const locationId = searchParams.get("locationId");
+
+  if (!locationId) {
+    return NextResponse.json(
+      { error: "locationId query parameter is required" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    // Verify location belongs to user's organization
+    const location = await prisma.location.findUnique({
+      where: { id: locationId },
+      include: { restaurantGroup: true },
+    });
+
+    if (!location) {
+      return NextResponse.json({ error: "Location not found" }, { status: 404 });
+    }
+
+    if (location.restaurantGroup.organizationId !== auth.membership.organizationId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    }
+
+    // Get current insights (isCurrent = true)
+    const currentInsights = await prisma.aIInsight.findMany({
+      where: {
+        locationId,
+        isCurrent: true,
+      },
+      orderBy: { generatedAt: "desc" },
+      include: {
+        feedback: {
+          select: {
+            id: true,
+            rating: true,
+            userComment: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    // Get count of historical insights
+    const historicalCount = await prisma.aIInsight.count({
+      where: {
+        locationId,
+        isCurrent: false,
+      },
+    });
+
+    // Get the batch generation time (from the first insight in current batch)
+    const generatedAt = currentInsights.length > 0 ? currentInsights[0].generatedAt : null;
+    const batchId = currentInsights.length > 0 ? currentInsights[0].batchId : null;
+
+    return NextResponse.json({
+      hasInsights: currentInsights.length > 0,
+      insights: currentInsights.map((insight) => ({
+        id: insight.id,
+        title: insight.title,
+        headline: insight.headline || insight.title,
+        content: insight.content,
+        detail: insight.detail,
+        keyPoints: insight.keyPoints,
+        recommendations: insight.recommendations,
+        recommendation: insight.recommendation,
+        impact: insight.impact,
+        layer: insight.layer || "sales",
+        insightType: insight.insightType || "trend",
+        generatedAt: insight.generatedAt,
+        feedback: insight.feedback,
+      })),
+      batchId,
+      generatedAt,
+      historicalCount,
+      locationName: location.name,
+    });
+  } catch (error) {
+    console.error("Insights fetch error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json(
+      { error: "Failed to fetch insights", details: errorMessage },
+      { status: 500 }
+    );
+  }
+}
 
 /**
  * POST /api/intelligence/generate
  *
  * Generates AI insights based on synced data for a location.
- * Used during onboarding to reveal intelligence after data sync.
+ * If forceNew=false (default), returns existing current insights if they exist.
+ * If forceNew=true, generates a new batch and marks previous as historical.
  */
 export async function POST(request: NextRequest) {
   // Auth check
@@ -27,17 +128,9 @@ export async function POST(request: NextRequest) {
     return auth;
   }
 
-  // Check if Claude is configured
-  if (!isClaudeConfigured()) {
-    return NextResponse.json(
-      { error: "AI service not configured" },
-      { status: 503 }
-    );
-  }
-
   try {
     const body = await request.json();
-    const { locationId, dataType } = requestSchema.parse(body);
+    const { locationId, dataType, forceNew } = requestSchema.parse(body);
 
     // Verify location belongs to user's organization
     const location = await prisma.location.findUnique({
@@ -53,6 +146,69 @@ export async function POST(request: NextRequest) {
 
     if (location.restaurantGroup.organizationId !== auth.membership.organizationId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    }
+
+    // Check for existing current insights (unless forceNew is true)
+    if (!forceNew) {
+      const existingInsights = await prisma.aIInsight.findMany({
+        where: {
+          locationId,
+          isCurrent: true,
+        },
+        orderBy: { generatedAt: "desc" },
+        include: {
+          feedback: {
+            select: {
+              id: true,
+              rating: true,
+              userComment: true,
+              createdAt: true,
+            },
+          },
+        },
+      });
+
+      if (existingInsights.length > 0) {
+        // Return existing insights without generating new ones
+        console.log("[Intelligence] Returning existing insights for location:", locationId);
+
+        const historicalCount = await prisma.aIInsight.count({
+          where: { locationId, isCurrent: false },
+        });
+
+        return NextResponse.json({
+          success: true,
+          fromCache: true,
+          insights: existingInsights.map((insight) => ({
+            id: insight.id,
+            title: insight.title,
+            headline: insight.headline || insight.title,
+            content: insight.content,
+            detail: insight.detail,
+            keyPoints: insight.keyPoints,
+            recommendations: insight.recommendations,
+            recommendation: insight.recommendation,
+            impact: insight.impact,
+            layer: insight.layer || "sales",
+            insightType: insight.insightType || "trend",
+            generatedAt: insight.generatedAt,
+            feedback: insight.feedback,
+          })),
+          batchId: existingInsights[0].batchId,
+          generatedAt: existingInsights[0].generatedAt,
+          historicalCount,
+          dataType,
+          locationName: location.name,
+        });
+      }
+    }
+
+    // Check if Claude is configured
+    if (!isClaudeConfigured()) {
+      return NextResponse.json(
+        { error: "AI service not configured" },
+        { status: 503 }
+      );
     }
 
     // Build the intelligence request based on available data
@@ -93,9 +249,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate intelligence
-    console.log("[Intelligence] Generating insights for location:", locationId, "dataType:", dataType);
-    console.log("[Intelligence] Sales data available:", !!intelligenceRequest.salesData);
-    console.log("[Intelligence] Restaurant type:", intelligenceRequest.restaurantType);
+    console.log("[Intelligence] Generating NEW insights for location:", locationId, "dataType:", dataType, "forceNew:", forceNew);
 
     let intelligence;
     try {
@@ -106,8 +260,21 @@ export async function POST(request: NextRequest) {
       throw aiError;
     }
 
-    // Store the insight in the database for feedback tracking
-    // First, ensure we have a prompt record for onboarding
+    // Generate a new batch ID
+    const batchId = randomUUID();
+
+    // Mark all previous insights for this location as not current
+    await prisma.aIInsight.updateMany({
+      where: {
+        locationId,
+        isCurrent: true,
+      },
+      data: {
+        isCurrent: false,
+      },
+    });
+
+    // Ensure we have a prompt record
     const promptSlug = `onboarding-${dataType}`;
     const prompt = await prisma.aIPrompt.upsert({
       where: { id: promptSlug },
@@ -125,30 +292,99 @@ export async function POST(request: NextRequest) {
       update: {},
     });
 
-    const aiInsight = await prisma.aIInsight.create({
+    const now = new Date();
+    const sevenMonthsAgo = new Date();
+    sevenMonthsAgo.setMonth(sevenMonthsAgo.getMonth() - 7);
+
+    // Create individual insight records for each insight
+    const createdInsights = [];
+
+    // Create main summary insight
+    const mainInsight = await prisma.aIInsight.create({
       data: {
         locationId,
         promptId: prompt.id,
+        batchId,
+        isCurrent: true,
+        layer: "sales",
+        insightType: "trend",
         periodType: "MONTHLY",
-        periodStart: new Date(new Date().setMonth(new Date().getMonth() - 7)),
-        periodEnd: new Date(),
+        periodStart: sevenMonthsAgo,
+        periodEnd: now,
         inputData: intelligenceRequest as object,
         title: intelligence.title,
+        headline: intelligence.title,
         content: intelligence.summary,
+        detail: intelligence.summary,
         keyPoints: intelligence.insights,
         recommendations: intelligence.recommendations as object,
-        model: "claude-3-5-sonnet-20241022",
+        model: "claude-sonnet-4-5-20250929",
         promptVersion: 1,
       },
     });
+    createdInsights.push(mainInsight);
+
+    // Create separate insights for each key point (so they can have individual feedback)
+    for (let i = 0; i < intelligence.insights.length; i++) {
+      const insightText = intelligence.insights[i];
+      const recommendation = intelligence.recommendations[i] || null;
+
+      const individualInsight = await prisma.aIInsight.create({
+        data: {
+          locationId,
+          promptId: prompt.id,
+          batchId,
+          isCurrent: true,
+          layer: "sales",
+          insightType: i === intelligence.insights.length - 1 ? "opportunity" : "trend",
+          periodType: "MONTHLY",
+          periodStart: sevenMonthsAgo,
+          periodEnd: now,
+          inputData: {},
+          title: `Insight ${i + 1}`,
+          headline: insightText.slice(0, 100),
+          content: insightText,
+          detail: insightText,
+          keyPoints: [insightText],
+          recommendation: recommendation,
+          recommendations: recommendation ? [recommendation] : [],
+          model: "claude-sonnet-4-5-20250929",
+          promptVersion: 1,
+        },
+      });
+      createdInsights.push(individualInsight);
+    }
 
     // Update onboarding state
     await updateOnboardingState(locationId, dataType);
 
+    // Get historical count
+    const historicalCount = await prisma.aIInsight.count({
+      where: { locationId, isCurrent: false },
+    });
+
     return NextResponse.json({
       success: true,
-      intelligence,
-      insightId: aiInsight.id,
+      fromCache: false,
+      intelligence, // Keep for backward compatibility
+      insights: createdInsights.map((insight) => ({
+        id: insight.id,
+        title: insight.title,
+        headline: insight.headline || insight.title,
+        content: insight.content,
+        detail: insight.detail,
+        keyPoints: insight.keyPoints,
+        recommendations: insight.recommendations,
+        recommendation: insight.recommendation,
+        impact: insight.impact,
+        layer: insight.layer,
+        insightType: insight.insightType,
+        generatedAt: insight.generatedAt,
+        feedback: [],
+      })),
+      batchId,
+      generatedAt: now,
+      historicalCount,
       dataType,
       locationName: location.name,
     });
@@ -175,7 +411,6 @@ export async function POST(request: NextRequest) {
  * Fetch and aggregate sales data for intelligence generation
  */
 async function fetchSalesData(locationId: string) {
-  // Get transaction summaries for the last 7 months
   const sevenMonthsAgo = new Date();
   sevenMonthsAgo.setMonth(sevenMonthsAgo.getMonth() - 7);
   sevenMonthsAgo.setDate(1);
@@ -192,7 +427,6 @@ async function fetchSalesData(locationId: string) {
     return null;
   }
 
-  // Calculate aggregates
   const totalRevenue = transactions.reduce(
     (sum, tx) => sum + Number(tx.netSales),
     0
@@ -205,7 +439,6 @@ async function fetchSalesData(locationId: string) {
   const avgCheckSize =
     transactionCount > 0 ? totalRevenue / transactionCount : 0;
 
-  // Group by day of week to find patterns
   const dayTotals: Record<string, number[]> = {};
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -218,7 +451,6 @@ async function fetchSalesData(locationId: string) {
     dayTotals[dayName].push(Number(tx.netSales));
   }
 
-  // Calculate average by day
   const dayAverages = Object.entries(dayTotals)
     .map(([day, values]) => ({
       day,
@@ -226,7 +458,6 @@ async function fetchSalesData(locationId: string) {
     }))
     .sort((a, b) => b.revenue - a.revenue);
 
-  // Determine trend (compare first half vs second half)
   const midpoint = Math.floor(transactions.length / 2);
   const recentHalf = transactions.slice(0, midpoint);
   const olderHalf = transactions.slice(midpoint);
@@ -239,14 +470,13 @@ async function fetchSalesData(locationId: string) {
     (olderHalf.length || 1);
 
   let trend: "up" | "down" | "flat" = "flat";
-  const trendThreshold = 0.05; // 5% change threshold
+  const trendThreshold = 0.05;
   if (recentAvg > olderAvg * (1 + trendThreshold)) {
     trend = "up";
   } else if (recentAvg < olderAvg * (1 - trendThreshold)) {
     trend = "down";
   }
 
-  // Calculate months of data
   const uniqueMonths = new Set(
     transactions.map((tx) => {
       const date = new Date(tx.date);
@@ -270,7 +500,6 @@ async function fetchSalesData(locationId: string) {
  * Fetch and aggregate cost data for intelligence generation
  */
 async function fetchCostData(locationId: string) {
-  // Get monthly metrics for cost analysis
   const sevenMonthsAgo = new Date();
   sevenMonthsAgo.setMonth(sevenMonthsAgo.getMonth() - 7);
   sevenMonthsAgo.setDate(1);
@@ -287,7 +516,6 @@ async function fetchCostData(locationId: string) {
     return null;
   }
 
-  // Calculate aggregates
   const totalCosts = monthlyMetrics.reduce((sum, m) => {
     const labor = Number(m.laborCost ?? 0);
     const food = Number(m.foodCost ?? 0);
@@ -304,7 +532,6 @@ async function fetchCostData(locationId: string) {
     monthlyMetrics.reduce((sum, m) => sum + Number(m.primeCost ?? 0), 0) /
     monthlyMetrics.length;
 
-  // Determine trend
   const midpoint = Math.floor(monthlyMetrics.length / 2);
   const recentHalf = monthlyMetrics.slice(0, midpoint);
   const olderHalf = monthlyMetrics.slice(midpoint);
@@ -317,8 +544,7 @@ async function fetchCostData(locationId: string) {
     (olderHalf.length || 1);
 
   let trend: "up" | "down" | "flat" = "flat";
-  const trendThreshold = 0.02; // 2% change threshold for costs
-  // For costs, "up" is bad, "down" is good
+  const trendThreshold = 0.02;
   if (recentPrime > olderPrime * (1 + trendThreshold)) {
     trend = "up";
   } else if (recentPrime < olderPrime * (1 - trendThreshold)) {
@@ -342,11 +568,9 @@ async function updateOnboardingState(
   locationId: string,
   dataType: "pos" | "accounting" | "combined"
 ) {
-  // Find the relevant integration based on data type
   let integrationType: "TOAST" | "SQUARE" | "R365" | "MARGINEDGE" | undefined;
 
   if (dataType === "pos") {
-    // Check for POS integrations
     const posIntegration = await prisma.integration.findFirst({
       where: {
         locationId,
@@ -358,7 +582,6 @@ async function updateOnboardingState(
       integrationType = posIntegration.type as "TOAST" | "SQUARE";
     }
   } else if (dataType === "accounting") {
-    // Check for accounting integrations
     const accountingIntegration = await prisma.integration.findFirst({
       where: {
         locationId,
@@ -371,7 +594,6 @@ async function updateOnboardingState(
     }
   }
 
-  // Update the integration's onboarding step
   if (integrationType) {
     await prisma.integration.updateMany({
       where: {
@@ -379,7 +601,7 @@ async function updateOnboardingState(
         type: integrationType,
       },
       data: {
-        onboardingStep: dataType === "pos" ? 3 : 5, // Step 3 = POS insights revealed, Step 5 = Accounting insights revealed
+        onboardingStep: dataType === "pos" ? 3 : 5,
       },
     });
   }
