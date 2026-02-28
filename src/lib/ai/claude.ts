@@ -84,7 +84,19 @@ export async function generateIntelligence(
 
   // Parse the JSON response
   try {
-    const response = JSON.parse(textContent.text) as IntelligenceResponse;
+    // Strip markdown code block formatting if present
+    let jsonText = textContent.text.trim();
+    if (jsonText.startsWith("```json")) {
+      jsonText = jsonText.slice(7); // Remove ```json
+    } else if (jsonText.startsWith("```")) {
+      jsonText = jsonText.slice(3); // Remove ```
+    }
+    if (jsonText.endsWith("```")) {
+      jsonText = jsonText.slice(0, -3); // Remove trailing ```
+    }
+    jsonText = jsonText.trim();
+
+    const response = JSON.parse(jsonText) as IntelligenceResponse;
     return response;
   } catch {
     // If JSON parsing fails, create a structured response from the text
