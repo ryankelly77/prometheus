@@ -14,7 +14,6 @@ import {
   Lock,
   Zap,
   ArrowRight,
-  RefreshCw
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,6 +25,7 @@ import { cn } from '@/lib/utils'
 
 // Onboarding steps
 type OnboardingStep =
+  | 'loading'
   | 'welcome'
   | 'connect-pos'
   | 'syncing-pos'
@@ -70,6 +70,15 @@ interface SyncProgress {
   error?: string
 }
 
+interface PreCompletedData {
+  posConnected: boolean
+  posName: string
+  restaurantName: string
+  syncedMonths: number
+  totalRevenue: number
+  daysWithData: number
+}
+
 // Get 7 months with current month first
 function get7Months(): { label: string; startDate: Date; endDate: Date }[] {
   const months: { label: string; startDate: Date; endDate: Date }[] = []
@@ -84,7 +93,6 @@ function get7Months(): { label: string; startDate: Date; endDate: Date }[] {
     months.push({ label, startDate: start, endDate: effectiveEnd })
   }
 
-  // Return with current month first (already in that order)
   return months
 }
 
@@ -94,7 +102,7 @@ export default function OnboardingPage() {
   const { currentLocation, locations } = useLocation()
 
   // State
-  const [step, setStep] = useState<OnboardingStep>('welcome')
+  const [step, setStep] = useState<OnboardingStep>('loading')
   const [integrationId, setIntegrationId] = useState<string | null>(null)
   const [toastModalOpen, setToastModalOpen] = useState(false)
   const [months, setMonths] = useState<MonthStatus[]>([])
@@ -103,45 +111,69 @@ export default function OnboardingPage() {
   const [combinedIntelligence, setCombinedIntelligence] = useState<Intelligence | null>(null)
   const [isGeneratingInsights, setIsGeneratingInsights] = useState(false)
   const [totalSynced, setTotalSynced] = useState({ sales: 0, orders: 0 })
+  const [completedSteps, setCompletedSteps] = useState<string[]>([])
+  const [preCompletedData, setPreCompletedData] = useState<PreCompletedData | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const locationToUse = currentLocation ?? locations[0]
 
-  // Check existing onboarding state on mount
+  // Check onboarding status on mount
   useEffect(() => {
-    async function checkOnboardingState() {
-      if (!locationToUse?.id) return
-
+    async function checkOnboardingStatus() {
       try {
-        const response = await fetch(`/api/integrations/toast/status?locationId=${locationToUse.id}`)
+        const response = await fetch('/api/onboarding/status')
         const data = await response.json()
 
-        if (data.success && data.isConnected) {
-          setIntegrationId(data.integrationId)
+        if (!data.needsOnboarding) {
+          // Fully complete - redirect to dashboard
+          router.replace('/dashboard')
+          return
+        }
 
-          // Check onboarding step from integration
-          if (data.onboardingStep) {
-            // Resume from saved step
-            if (data.onboardingStep >= 6) {
-              setStep('complete')
-            } else if (data.onboardingStep >= 3) {
-              setStep('teaser-accounting')
-            } else if (data.onboardingStep >= 2) {
-              // Was syncing, check status
-              setStep('syncing-pos')
-            }
-          } else if (data.onboardingSyncedMonths > 0) {
-            // Has some data, go to insights or continue syncing
-            setStep('syncing-pos')
-          }
+        // Set integration ID if available
+        if (data.integrationId) {
+          setIntegrationId(data.integrationId)
+        }
+
+        // Set completed steps
+        if (data.completedSteps) {
+          setCompletedSteps(data.completedSteps)
+        }
+
+        // Set pre-completed data for display
+        if (data.posConnected) {
+          setPreCompletedData({
+            posConnected: data.posConnected,
+            posName: data.posName ?? 'Toast',
+            restaurantName: data.restaurantName ?? locationToUse?.name ?? 'Your Restaurant',
+            syncedMonths: data.syncedMonths ?? 0,
+            totalRevenue: data.totalRevenue ?? 0,
+            daysWithData: data.daysWithData ?? 0,
+          })
+          setTotalSynced({
+            sales: data.totalRevenue ?? 0,
+            orders: data.daysWithData ?? 0,
+          })
+        }
+
+        // Set current step
+        if (data.currentStep) {
+          setStep(data.currentStep as OnboardingStep)
+        } else if (data.reason === 'no_pos_integration' || data.reason === 'pos_not_connected') {
+          setStep('welcome')
+        } else {
+          setStep('welcome')
         }
       } catch (error) {
-        console.error('Failed to check onboarding state:', error)
+        console.error('Failed to check onboarding status:', error)
+        setStep('welcome')
       }
     }
 
-    checkOnboardingState()
-  }, [locationToUse?.id])
+    if (locationToUse?.id) {
+      checkOnboardingStatus()
+    }
+  }, [locationToUse?.id, router])
 
   // Handle POS connection success
   const handlePosConnectSuccess = (newIntegrationId: string) => {
@@ -287,7 +319,7 @@ export default function OnboardingPage() {
   }, [syncMonth])
 
   // Generate POS insights
-  const generatePosInsights = async () => {
+  const generatePosInsights = useCallback(async () => {
     if (!locationToUse?.id) return
 
     setIsGeneratingInsights(true)
@@ -306,13 +338,15 @@ export default function OnboardingPage() {
 
       if (data.success && data.intelligence) {
         setPosIntelligence(data.intelligence)
+      } else {
+        throw new Error(data.error || 'Failed to generate insights')
       }
     } catch (error) {
       console.error('Failed to generate insights:', error)
       // Set fallback insight
       setPosIntelligence({
         title: 'Sales Analysis Complete',
-        summary: `We've analyzed ${totalSynced.orders.toLocaleString()} orders totaling $${totalSynced.sales.toLocaleString()}. Connect your accounting system to unlock deeper insights.`,
+        summary: `We've analyzed your sales data. Connect your accounting system to unlock deeper insights.`,
         insights: ['Your sales data has been synced and analyzed.'],
         recommendations: ['Connect accounting data for cost analysis and profit insights.'],
         dataQuality: 'good',
@@ -320,6 +354,22 @@ export default function OnboardingPage() {
     } finally {
       setIsGeneratingInsights(false)
     }
+  }, [locationToUse?.id])
+
+  // Mark onboarding as complete
+  const markOnboardingComplete = async () => {
+    if (integrationId) {
+      await fetch('/api/integrations/toast/onboarding-progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          integrationId,
+          syncedMonths: preCompletedData?.syncedMonths ?? 7,
+          step: 6, // Final step
+        }),
+      }).catch(() => {})
+    }
+    setStep('complete')
   }
 
   const formatCurrency = (value: number) => {
@@ -334,6 +384,22 @@ export default function OnboardingPage() {
   const syncedCount = months.filter(m => m.status === 'synced').length
   const progress = (syncedCount / 7) * 100
 
+  // Check if steps are pre-completed
+  const isPosConnectComplete = completedSteps.includes('connect-pos')
+  const isSyncComplete = completedSteps.includes('syncing-pos')
+
+  // Loading state
+  if (step === 'loading') {
+    return (
+      <div className="container max-w-3xl py-8 flex items-center justify-center min-h-[400px]">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="container max-w-3xl py-8 space-y-8">
       {/* Progress indicator */}
@@ -343,7 +409,7 @@ export default function OnboardingPage() {
             key={s}
             className={cn(
               'h-2 w-16 rounded-full transition-colors',
-              step === s || (['welcome', 'connect-pos'].includes(step) && i === 0)
+              completedSteps.includes(s) || step === s || (['welcome', 'connect-pos'].includes(step) && i === 0)
                 ? 'bg-primary'
                 : i < ['connect-pos', 'syncing-pos', 'reveal-pos-insights', 'teaser-accounting'].indexOf(step)
                   ? 'bg-primary'
@@ -352,6 +418,37 @@ export default function OnboardingPage() {
           />
         ))}
       </div>
+
+      {/* Pre-completed steps summary (shown when starting at insights step) */}
+      {(isPosConnectComplete || isSyncComplete) && step === 'reveal-pos-insights' && preCompletedData && (
+        <div className="space-y-3">
+          {/* Connect POS - Completed */}
+          <Card className="border-green-200 dark:border-green-900 bg-green-50/30 dark:bg-green-950/10">
+            <CardContent className="flex items-center gap-4 p-4">
+              <CheckCircle2 className="h-6 w-6 text-green-600 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium text-green-700 dark:text-green-400">Connect your POS</p>
+                <p className="text-sm text-green-600/80 dark:text-green-400/70">
+                  {preCompletedData.posName} connected · {preCompletedData.restaurantName}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Sync Data - Completed */}
+          <Card className="border-green-200 dark:border-green-900 bg-green-50/30 dark:bg-green-950/10">
+            <CardContent className="flex items-center gap-4 p-4">
+              <CheckCircle2 className="h-6 w-6 text-green-600 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium text-green-700 dark:text-green-400">Sync sales data</p>
+                <p className="text-sm text-green-600/80 dark:text-green-400/70">
+                  {preCompletedData.syncedMonths} months synced · {formatCurrency(preCompletedData.totalRevenue)} total revenue
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <AnimatePresence mode="wait">
         {/* Welcome Step */}
@@ -497,7 +594,7 @@ export default function OnboardingPage() {
                 </div>
 
                 <div className="space-y-2">
-                  {months.map((month, i) => (
+                  {months.map((month) => (
                     <div
                       key={month.label}
                       className={cn(
@@ -548,65 +645,100 @@ export default function OnboardingPage() {
             exit={{ opacity: 0, y: -20 }}
             className="space-y-6"
           >
-            <div className="text-center space-y-2">
-              <div className="mx-auto w-fit rounded-full bg-green-100 dark:bg-green-900/30 p-3">
-                <Sparkles className="h-8 w-8 text-green-600" />
-              </div>
-              <h1 className="text-2xl font-bold">Your First Insights</h1>
-              <p className="text-muted-foreground">
-                Here&apos;s what we discovered from your sales data
-              </p>
-            </div>
+            {/* Current step indicator */}
+            <Card className="border-primary/50 bg-primary/5">
+              <CardContent className="flex items-center gap-4 p-4">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground font-bold">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <div className="flex-1">
+                  <p className="font-medium">Reveal your first insights</p>
+                  <p className="text-sm text-muted-foreground">
+                    {posIntelligence ? 'AI analysis complete' : 'Click below to generate AI insights'}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
 
-            {isGeneratingInsights ? (
+            {!posIntelligence && !isGeneratingInsights && (
+              <div className="text-center space-y-4">
+                <div className="mx-auto w-fit rounded-full bg-primary/10 p-4">
+                  <Sparkles className="h-12 w-12 text-primary" />
+                </div>
+                <h1 className="text-2xl font-bold">Ready for Your Insights</h1>
+                <p className="text-muted-foreground max-w-md mx-auto">
+                  We&apos;ve synced your sales data. Click below to generate AI-powered insights about your restaurant.
+                </p>
+                <Button size="lg" onClick={generatePosInsights}>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Generate Insights
+                </Button>
+              </div>
+            )}
+
+            {isGeneratingInsights && (
               <Card>
                 <CardContent className="py-12 flex flex-col items-center gap-4">
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
                   <p className="text-muted-foreground">Analyzing your data with AI...</p>
                 </CardContent>
               </Card>
-            ) : posIntelligence ? (
-              <Card className="border-green-200 dark:border-green-900">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <TrendingUp className="h-5 w-5 text-green-600" />
-                    {posIntelligence.title}
-                  </CardTitle>
-                  <CardDescription>{posIntelligence.summary}</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <h4 className="text-sm font-semibold mb-2">Key Insights</h4>
-                    <ul className="space-y-2">
-                      {posIntelligence.insights.map((insight, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm">
-                          <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
-                          <span>{insight}</span>
-                        </li>
-                      ))}
-                    </ul>
+            )}
+
+            {posIntelligence && !isGeneratingInsights && (
+              <>
+                <div className="text-center space-y-2">
+                  <div className="mx-auto w-fit rounded-full bg-green-100 dark:bg-green-900/30 p-3">
+                    <Sparkles className="h-8 w-8 text-green-600" />
                   </div>
-                  {posIntelligence.recommendations.length > 0 && (
+                  <h1 className="text-2xl font-bold">Your First Insights</h1>
+                  <p className="text-muted-foreground">
+                    Here&apos;s what we discovered from your sales data
+                  </p>
+                </div>
+
+                <Card className="border-green-200 dark:border-green-900">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5 text-green-600" />
+                      {posIntelligence.title}
+                    </CardTitle>
+                    <CardDescription>{posIntelligence.summary}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
                     <div>
-                      <h4 className="text-sm font-semibold mb-2">Recommendations</h4>
+                      <h4 className="text-sm font-semibold mb-2">Key Insights</h4>
                       <ul className="space-y-2">
-                        {posIntelligence.recommendations.map((rec, i) => (
+                        {posIntelligence.insights.map((insight, i) => (
                           <li key={i} className="flex items-start gap-2 text-sm">
-                            <Zap className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                            <span>{rec}</span>
+                            <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                            <span>{insight}</span>
                           </li>
                         ))}
                       </ul>
                     </div>
-                  )}
-                </CardContent>
-              </Card>
-            ) : null}
+                    {posIntelligence.recommendations.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-semibold mb-2">Recommendations</h4>
+                        <ul className="space-y-2">
+                          {posIntelligence.recommendations.map((rec, i) => (
+                            <li key={i} className="flex items-start gap-2 text-sm">
+                              <Zap className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                              <span>{rec}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
 
-            <Button size="lg" className="w-full" onClick={() => setStep('teaser-accounting')}>
-              Continue
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
+                <Button size="lg" className="w-full" onClick={() => setStep('teaser-accounting')}>
+                  Continue
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </>
+            )}
           </motion.div>
         )}
 
@@ -675,7 +807,7 @@ export default function OnboardingPage() {
               <Button
                 variant="outline"
                 className="flex-1"
-                onClick={() => setStep('complete')}
+                onClick={markOnboardingComplete}
               >
                 Skip for Now
               </Button>
@@ -686,7 +818,7 @@ export default function OnboardingPage() {
                     title: "Coming Soon",
                     description: "We'll help you connect R365 during your onboarding session.",
                   })
-                  setStep('complete')
+                  markOnboardingComplete()
                 }}
               >
                 Connect Accounting
@@ -719,13 +851,13 @@ export default function OnboardingPage() {
                 <div className="grid grid-cols-2 gap-4 text-center">
                   <div>
                     <p className="text-2xl font-bold tabular-nums text-green-600">
-                      {totalSynced.orders.toLocaleString()}
+                      {preCompletedData?.syncedMonths ?? syncedCount}
                     </p>
-                    <p className="text-xs text-muted-foreground">Orders Synced</p>
+                    <p className="text-xs text-muted-foreground">Months Synced</p>
                   </div>
                   <div>
                     <p className="text-2xl font-bold tabular-nums text-green-600">
-                      {formatCurrency(totalSynced.sales)}
+                      {formatCurrency(totalSynced.sales || preCompletedData?.totalRevenue || 0)}
                     </p>
                     <p className="text-xs text-muted-foreground">Sales Analyzed</p>
                   </div>
