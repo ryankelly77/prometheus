@@ -103,6 +103,7 @@ export default function OnboardingPage() {
 
   // State
   const [step, setStep] = useState<OnboardingStep>('loading')
+  const [locationId, setLocationId] = useState<string | null>(null)
   const [integrationId, setIntegrationId] = useState<string | null>(null)
   const [toastModalOpen, setToastModalOpen] = useState(false)
   const [months, setMonths] = useState<MonthStatus[]>([])
@@ -118,11 +119,14 @@ export default function OnboardingPage() {
   const locationToUse = currentLocation ?? locations[0]
 
   // Check onboarding status on mount
+  // Note: The API gets the location from server-side auth, no need to wait for client-side location
   useEffect(() => {
     async function checkOnboardingStatus() {
       try {
         const response = await fetch('/api/onboarding/status')
         const data = await response.json()
+
+        console.log('[Onboarding] Status response:', data)
 
         if (!data.needsOnboarding) {
           // Fully complete - redirect to dashboard
@@ -130,7 +134,10 @@ export default function OnboardingPage() {
           return
         }
 
-        // Set integration ID if available
+        // Set location ID and integration ID if available
+        if (data.locationId) {
+          setLocationId(data.locationId)
+        }
         if (data.integrationId) {
           setIntegrationId(data.integrationId)
         }
@@ -145,7 +152,7 @@ export default function OnboardingPage() {
           setPreCompletedData({
             posConnected: data.posConnected,
             posName: data.posName ?? 'Toast',
-            restaurantName: data.restaurantName ?? locationToUse?.name ?? 'Your Restaurant',
+            restaurantName: data.restaurantName ?? 'Your Restaurant',
             syncedMonths: data.syncedMonths ?? 0,
             totalRevenue: data.totalRevenue ?? 0,
             daysWithData: data.daysWithData ?? 0,
@@ -156,8 +163,9 @@ export default function OnboardingPage() {
           })
         }
 
-        // Set current step
+        // Set current step based on API response
         if (data.currentStep) {
+          console.log('[Onboarding] Setting step to:', data.currentStep)
           setStep(data.currentStep as OnboardingStep)
         } else if (data.reason === 'no_pos_integration' || data.reason === 'pos_not_connected') {
           setStep('welcome')
@@ -170,10 +178,9 @@ export default function OnboardingPage() {
       }
     }
 
-    if (locationToUse?.id) {
-      checkOnboardingStatus()
-    }
-  }, [locationToUse?.id, router])
+    // Run immediately on mount - API gets location from server-side auth
+    checkOnboardingStatus()
+  }, [router])
 
   // Handle POS connection success
   const handlePosConnectSuccess = (newIntegrationId: string) => {
@@ -320,7 +327,12 @@ export default function OnboardingPage() {
 
   // Generate POS insights
   const generatePosInsights = useCallback(async () => {
-    if (!locationToUse?.id) return
+    // Use locationId from API response, fallback to hook
+    const locId = locationId ?? locationToUse?.id
+    if (!locId) {
+      console.error('[Onboarding] No locationId available for insights generation')
+      return
+    }
 
     setIsGeneratingInsights(true)
 
@@ -329,7 +341,7 @@ export default function OnboardingPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          locationId: locationToUse.id,
+          locationId: locId,
           dataType: 'pos',
         }),
       })
@@ -354,7 +366,7 @@ export default function OnboardingPage() {
     } finally {
       setIsGeneratingInsights(false)
     }
-  }, [locationToUse?.id])
+  }, [locationId, locationToUse?.id])
 
   // Mark onboarding as complete
   const markOnboardingComplete = async () => {
