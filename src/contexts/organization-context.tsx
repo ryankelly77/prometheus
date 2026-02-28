@@ -44,16 +44,34 @@ interface OrganizationProviderProps {
 }
 
 /**
+ * Get cached branding from localStorage (runs synchronously on client)
+ */
+function getCachedBranding(): OrganizationBranding | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const cached = localStorage.getItem('prometheus_branding');
+    if (cached) {
+      return JSON.parse(cached) as OrganizationBranding;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null;
+}
+
+/**
  * Provides organization context for white-label branding.
  * Fetches organization branding from API or uses initial data from server.
+ * Uses localStorage cache as initial state to prevent flash.
  */
 export function OrganizationProvider({
   children,
   initialOrganization = null,
 }: OrganizationProviderProps) {
+  // Initialize from cache to prevent flash
   const [organization, setOrganization] =
-    useState<OrganizationBranding | null>(initialOrganization);
-  const [isLoading, setIsLoading] = useState(!initialOrganization);
+    useState<OrganizationBranding | null>(() => initialOrganization ?? getCachedBranding());
+  const [isLoading, setIsLoading] = useState(!initialOrganization && !getCachedBranding());
   const [error, setError] = useState<string | null>(null);
 
   const fetchOrganization = useCallback(async () => {

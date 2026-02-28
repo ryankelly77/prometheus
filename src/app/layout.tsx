@@ -64,6 +64,21 @@ export default function RootLayout({
           root.style.setProperty('--accent-foreground', accentFg);
           root.style.setProperty('--sidebar-accent-foreground', accentFg);
         }
+        // Preload logo images to prevent flash
+        if (org.logoUrl) {
+          var link = document.createElement('link');
+          link.rel = 'preload';
+          link.as = 'image';
+          link.href = org.logoUrl;
+          document.head.appendChild(link);
+        }
+        if (org.logoIconUrl) {
+          var iconLink = document.createElement('link');
+          iconLink.rel = 'preload';
+          iconLink.as = 'image';
+          iconLink.href = org.logoIconUrl;
+          document.head.appendChild(iconLink);
+        }
       } catch(e) {}
     })();
   `;
