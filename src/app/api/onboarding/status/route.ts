@@ -62,43 +62,32 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Connected but onboarding not completed
-    if (!posIntegration.onboardingCompletedAt) {
-      // Check if they have any synced data
-      const hasSyncedData = await prisma.transactionSummary.count({
-        where: { locationId: location.id },
+    // Check if they have any synced data (existing restaurants)
+    const hasSyncedData = await prisma.transactionSummary.count({
+      where: { locationId: location.id },
+    });
+
+    // A restaurant has completed onboarding if EITHER:
+    // 1. onboardingCompletedAt is set (new flow), OR
+    // 2. They already have TransactionSummary data (existing restaurant)
+    if (posIntegration.onboardingCompletedAt || hasSyncedData > 0) {
+      // Onboarding complete - let them through
+      return NextResponse.json({
+        needsOnboarding: false,
+        reason: "complete",
+        locationId: location.id,
+        integrationId: posIntegration.id,
       });
-
-      if (hasSyncedData === 0 || (posIntegration.onboardingSyncedMonths ?? 0) < 1) {
-        return NextResponse.json({
-          needsOnboarding: true,
-          reason: "onboarding_in_progress",
-          locationId: location.id,
-          integrationId: posIntegration.id,
-          step: posIntegration.onboardingStep ?? 2,
-          syncedMonths: posIntegration.onboardingSyncedMonths ?? 0,
-        });
-      }
-
-      // They have data but didn't complete the insights step - still redirect
-      if ((posIntegration.onboardingStep ?? 0) < 3) {
-        return NextResponse.json({
-          needsOnboarding: true,
-          reason: "needs_insights",
-          locationId: location.id,
-          integrationId: posIntegration.id,
-          step: posIntegration.onboardingStep ?? 2,
-          syncedMonths: posIntegration.onboardingSyncedMonths ?? 0,
-        });
-      }
     }
 
-    // Onboarding complete
+    // No data and no completion marker - needs onboarding
     return NextResponse.json({
-      needsOnboarding: false,
-      reason: "complete",
+      needsOnboarding: true,
+      reason: "onboarding_in_progress",
       locationId: location.id,
       integrationId: posIntegration.id,
+      step: posIntegration.onboardingStep ?? 1,
+      syncedMonths: posIntegration.onboardingSyncedMonths ?? 0,
     });
   } catch (error) {
     console.error("Onboarding status check error:", error);
