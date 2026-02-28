@@ -119,11 +119,16 @@ export default function OnboardingPage() {
   const locationToUse = currentLocation ?? locations[0]
 
   // Check onboarding status on mount
-  // Note: The API gets the location from server-side auth, no need to wait for client-side location
+  // Pass the selected location from localStorage (set by location dropdown)
   useEffect(() => {
     async function checkOnboardingStatus() {
       try {
-        const response = await fetch('/api/onboarding/status')
+        // Get selected location from localStorage (matches dropdown selection)
+        const selectedLocationId = localStorage.getItem('selectedLocationId')
+        const url = selectedLocationId
+          ? `/api/onboarding/status?locationId=${selectedLocationId}`
+          : '/api/onboarding/status'
+        const response = await fetch(url)
         const data = await response.json()
 
         console.log('[Onboarding] Status response:', data)

@@ -89,7 +89,12 @@ export default function DashboardLayout({
 
     async function checkOnboarding() {
       try {
-        const response = await fetch("/api/onboarding/status");
+        // Get selected location from localStorage (matches dropdown selection)
+        const selectedLocationId = localStorage.getItem("selectedLocationId");
+        const url = selectedLocationId
+          ? `/api/onboarding/status?locationId=${selectedLocationId}`
+          : "/api/onboarding/status";
+        const response = await fetch(url);
         const data = await response.json();
 
         if (data.needsOnboarding) {

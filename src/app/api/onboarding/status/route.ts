@@ -18,24 +18,73 @@ export async function GET(request: NextRequest) {
     const auth = await requireRole("VIEWER");
     if (auth instanceof NextResponse) return auth;
 
-    // Get user's first location
-    const location = await prisma.location.findFirst({
-      where: {
-        restaurantGroup: {
-          organizationId: auth.membership.organizationId,
-        },
-      },
-      include: {
-        integrations: {
-          where: {
-            type: { in: ["TOAST", "SQUARE", "CLOVER", "REVEL"] },
+    // Check for locationId in query params (from dropdown selection)
+    const { searchParams } = new URL(request.url);
+    const requestedLocationId = searchParams.get("locationId");
+
+    let location;
+
+    if (requestedLocationId) {
+      // Use the specific location requested
+      location = await prisma.location.findFirst({
+        where: {
+          id: requestedLocationId,
+          restaurantGroup: {
+            organizationId: auth.membership.organizationId,
           },
         },
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
+        include: {
+          integrations: {
+            where: {
+              type: { in: ["TOAST", "SQUARE", "CLOVER", "REVEL"] },
+            },
+          },
+        },
+      });
+    } else {
+      // No specific location - try to find one with a connected POS first
+      location = await prisma.location.findFirst({
+        where: {
+          restaurantGroup: {
+            organizationId: auth.membership.organizationId,
+          },
+          integrations: {
+            some: {
+              type: { in: ["TOAST", "SQUARE", "CLOVER", "REVEL"] },
+              status: "CONNECTED",
+            },
+          },
+        },
+        include: {
+          integrations: {
+            where: {
+              type: { in: ["TOAST", "SQUARE", "CLOVER", "REVEL"] },
+            },
+          },
+        },
+      });
+
+      // If no location has a connected POS, fall back to first location
+      if (!location) {
+        location = await prisma.location.findFirst({
+          where: {
+            restaurantGroup: {
+              organizationId: auth.membership.organizationId,
+            },
+          },
+          include: {
+            integrations: {
+              where: {
+                type: { in: ["TOAST", "SQUARE", "CLOVER", "REVEL"] },
+              },
+            },
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        });
+      }
+    }
 
     if (!location) {
       console.log("[Onboarding Status] No location found");
