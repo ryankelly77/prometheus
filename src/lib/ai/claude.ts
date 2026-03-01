@@ -7,6 +7,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import prisma from "@/lib/prisma";
+import { analyzeWeatherCorrelations } from "@/lib/weather/correlations";
 
 // Initialize the client (uses ANTHROPIC_API_KEY env var by default)
 const anthropic = new Anthropic();
@@ -94,6 +95,18 @@ export const RESTAURANT_TYPE_CONTEXT: Record<RestaurantType, RestaurantTypeConte
   },
 };
 
+export interface WeatherFacts {
+  rainImpactPct: number; // DOW-adjusted
+  rainyDayCount: number;
+  estimatedRainLoss: number; // over the analysis period
+  tempSweetSpot: { min: number; max: number };
+  extremeHeatImpactPct: number;
+  extremeColdImpactPct: number;
+  severeWeatherEvents: number;
+  weatherExplainedAnomalies: number; // count of sales anomalies explained by weather
+  analyzedAt: string;
+}
+
 export interface DataFacts {
   avgMonthlyRevenue?: number;
   avgDailyRevenue?: number;
@@ -108,6 +121,7 @@ export interface DataFacts {
   monthlyTrend?: Array<{ month: string; netSales: number; orders: number }>;
   monthOverMonthGrowth?: number;
   seasonalPeak?: string;
+  weather?: WeatherFacts;
 }
 
 export interface RestaurantProfile {
@@ -366,6 +380,28 @@ export async function calculateDataFacts(locationId: string): Promise<DataFacts>
         }
       : undefined;
 
+  // Calculate weather correlations if we have weather data
+  let weather: WeatherFacts | undefined;
+  try {
+    const weatherCorrelation = await analyzeWeatherCorrelations(locationId);
+    if (weatherCorrelation.totalDaysAnalyzed > 0) {
+      weather = {
+        rainImpactPct: weatherCorrelation.adjustedRainImpactPct,
+        rainyDayCount: weatherCorrelation.rainyDayCount,
+        estimatedRainLoss: weatherCorrelation.estimatedRainLoss,
+        tempSweetSpot: weatherCorrelation.tempSweetSpot,
+        extremeHeatImpactPct: weatherCorrelation.adjustedExtremeHeatImpactPct,
+        extremeColdImpactPct: weatherCorrelation.adjustedExtremeColdImpactPct,
+        severeWeatherEvents: weatherCorrelation.severeWeatherDays.length,
+        weatherExplainedAnomalies: weatherCorrelation.weatherExplainedAnomalies.length,
+        analyzedAt: new Date().toISOString(),
+      };
+    }
+  } catch (weatherError) {
+    // Weather analysis is optional - don't fail if it errors
+    console.log("[DataFacts] Weather analysis skipped:", weatherError instanceof Error ? weatherError.message : "Unknown error");
+  }
+
   return {
     avgMonthlyRevenue: Math.round(avgMonthlyRevenue),
     avgDailyRevenue: Math.round(avgDailyRevenue),
@@ -380,6 +416,7 @@ export async function calculateDataFacts(locationId: string): Promise<DataFacts>
     monthlyTrend,
     monthOverMonthGrowth: Math.round(monthOverMonthGrowth * 10) / 10,
     seasonalPeak,
+    weather,
   };
 }
 
