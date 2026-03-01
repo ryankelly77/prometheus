@@ -444,16 +444,33 @@ export default function OverviewPage() {
       setError(null);
 
       try {
-        const response = await fetch(
-          `/api/dashboard/overview?locationId=${currentLocation.id}`
-        );
+        // Fetch overview data and daily briefing in parallel
+        const [overviewResponse, briefingResponse] = await Promise.all([
+          fetch(`/api/dashboard/overview?locationId=${currentLocation.id}`),
+          fetch(`/api/dashboard/daily-briefing?locationId=${currentLocation.id}`),
+        ]);
 
-        if (!response.ok) {
+        if (!overviewResponse.ok) {
           throw new Error("Failed to fetch overview data");
         }
 
-        const result = await response.json();
-        setData(result);
+        const overviewResult = await overviewResponse.json();
+
+        // Merge briefing data if available
+        let alert = overviewResult.alert;
+        let opportunity = overviewResult.opportunity;
+
+        if (briefingResponse.ok) {
+          const briefingResult = await briefingResponse.json();
+          if (briefingResult.alert) alert = briefingResult.alert;
+          if (briefingResult.opportunity) opportunity = briefingResult.opportunity;
+        }
+
+        setData({
+          ...overviewResult,
+          alert,
+          opportunity,
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred");
       } finally {

@@ -112,8 +112,8 @@ export async function GET(request: NextRequest) {
     // Get health score (most recent)
     const healthScoreData = await getHealthScore(locationId);
 
-    // Get alert and opportunity from daily briefing (dynamically generated)
-    const briefingData = await getDailyBriefing(locationId, request);
+    // Get alert and opportunity from daily briefing cache
+    const briefingData = await getDailyBriefing(locationId);
 
     // Get last sync time
     const lastSyncedAt = location.integrations[0]?.lastSyncAt?.toISOString() ?? null;
@@ -549,11 +549,13 @@ async function getHealthScore(
 }
 
 /**
- * Get daily briefing (alert and opportunity) via internal API call
+ * Get daily briefing (alert and opportunity) from cache
+ *
+ * Note: We only read from cache here. The briefing is generated when the user
+ * visits the overview page (client calls /api/dashboard/daily-briefing directly).
  */
 async function getDailyBriefing(
-  locationId: string,
-  request: NextRequest
+  locationId: string
 ): Promise<{
   alert: {
     type: "weather" | "anomaly" | "trend" | "milestone" | "positive";
@@ -568,27 +570,36 @@ async function getDailyBriefing(
   } | null;
 }> {
   try {
-    // Build the URL for the daily-briefing endpoint
-    const url = new URL("/api/dashboard/daily-briefing", request.url);
-    url.searchParams.set("locationId", locationId);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    // Forward the request with cookies for auth
-    const response = await fetch(url.toString(), {
-      headers: {
-        cookie: request.headers.get("cookie") || "",
+    const cached = await prisma.dailyBriefing.findUnique({
+      where: {
+        locationId_briefingDate: {
+          locationId,
+          briefingDate: today,
+        },
       },
     });
 
-    if (!response.ok) {
-      console.error("[Overview] Daily briefing request failed:", response.status);
-      return { alert: null, opportunity: null };
+    if (cached) {
+      return {
+        alert: cached.alert as {
+          type: "weather" | "anomaly" | "trend" | "milestone" | "positive";
+          icon: string;
+          headline: string;
+          detail: string;
+        } | null,
+        opportunity: cached.opportunity as {
+          headline: string;
+          detail: string;
+          estimatedImpact: string | null;
+        } | null,
+      };
     }
 
-    const data = await response.json();
-    return {
-      alert: data.alert || null,
-      opportunity: data.opportunity || null,
-    };
+    // No cached briefing - return null (client will generate on demand)
+    return { alert: null, opportunity: null };
   } catch (error) {
     console.error("[Overview] Failed to get daily briefing:", error);
     return { alert: null, opportunity: null };
