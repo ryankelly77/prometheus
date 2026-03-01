@@ -13,7 +13,7 @@ interface MonthStatus {
   label: string
   startDate: string
   endDate: string
-  status: 'not_synced' | 'synced' | 'syncing' | 'error' | 'queued'
+  status: 'not_synced' | 'synced' | 'syncing' | 'error' | 'queued' | 'resyncing'
   daysWithData: number
   netSales: number
   orderCount: number
@@ -78,6 +78,11 @@ export default function ToastSyncStatusPage() {
   const [elapsedTime, setElapsedTime] = useState(0)
   const hasAutoStarted = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
+
+  // Re-sync all months state
+  const [isResyncingAll, setIsResyncingAll] = useState(false)
+  const [resyncCompletedCount, setResyncCompletedCount] = useState(0)
+  const [resyncTotalCount, setResyncTotalCount] = useState(0)
 
   // Fetch initial sync status
   useEffect(() => {
@@ -298,6 +303,65 @@ export default function ToastSyncStatusPage() {
     }
   }
 
+  // Re-sync a single month (for already-synced months)
+  const resyncSingleMonth = async (monthLabel: string) => {
+    if (isSyncing || isResyncingAll) return
+
+    const allMonths = getLast12Months()
+    const month = allMonths.find(m => m.label === monthLabel)
+    if (month) {
+      // Mark as resyncing
+      setMonths(prev => prev.map(m =>
+        m.label === monthLabel ? { ...m, status: 'resyncing' as const } : m
+      ))
+      setIsSyncing(true)
+      await syncMonth(month)
+      setIsSyncing(false)
+    }
+  }
+
+  // Re-sync all months (current month first, then oldest to newest)
+  const resyncAllMonths = async () => {
+    if (isSyncing || isResyncingAll) return
+
+    const allMonths = getLast12Months()
+    // Reverse so current month is first, then process oldest to newest for the rest
+    const monthsInOrder = [...allMonths].reverse()
+
+    setIsResyncingAll(true)
+    setIsSyncing(true)
+    setResyncTotalCount(monthsInOrder.length)
+    setResyncCompletedCount(0)
+    setStartTime(new Date())
+
+    // Mark all as resyncing
+    setMonths(prev => prev.map(m => ({ ...m, status: 'resyncing' as const })))
+
+    for (let i = 0; i < monthsInOrder.length; i++) {
+      const month = monthsInOrder[i]
+      setCurrentMonthIndex(i)
+      setOverallProgress(Math.round((i / monthsInOrder.length) * 100))
+
+      // Mark current as syncing
+      setMonths(prev => prev.map(m =>
+        m.label === month.label ? { ...m, status: 'syncing' as const } : m
+      ))
+
+      await syncMonth(month)
+      setResyncCompletedCount(i + 1)
+
+      // Small delay between months to be kind to the API
+      if (i < monthsInOrder.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    }
+
+    setOverallProgress(100)
+    setIsResyncingAll(false)
+    setIsSyncing(false)
+    setCurrentMonthIndex(-1)
+  }
+
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -364,17 +428,25 @@ export default function ToastSyncStatusPage() {
             </div>
           </div>
         </div>
-        {!isSyncing && unsyncedMonths.length > 0 && (
-          <Button onClick={runBackfill}>
-            <Play className="mr-2 h-4 w-4" />
-            Sync {unsyncedMonths.length === 12 ? 'All' : `Remaining ${unsyncedMonths.length}`} Months
-          </Button>
-        )}
-        {isSyncing && (
-          <Button variant="destructive" onClick={stopSync}>
-            Stop Sync
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {!isSyncing && !isResyncingAll && unsyncedMonths.length > 0 && (
+            <Button onClick={runBackfill}>
+              <Play className="mr-2 h-4 w-4" />
+              Sync {unsyncedMonths.length === 12 ? 'All' : `Remaining ${unsyncedMonths.length}`} Months
+            </Button>
+          )}
+          {!isSyncing && !isResyncingAll && syncedMonths.length > 0 && (
+            <Button variant="outline" onClick={resyncAllMonths}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Re-sync All Months
+            </Button>
+          )}
+          {(isSyncing || isResyncingAll) && (
+            <Button variant="destructive" onClick={stopSync}>
+              Stop Sync
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Overall Progress Card */}
@@ -393,7 +465,9 @@ export default function ToastSyncStatusPage() {
           <Progress value={isSyncing ? overallProgress : (syncedMonths.length / 12) * 100} className="h-3" />
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">
-              {isComplete
+              {isResyncingAll
+                ? `Re-syncing... ${resyncCompletedCount} of ${resyncTotalCount} months complete`
+                : isComplete
                 ? 'All months synced'
                 : isSyncing
                 ? `Syncing month ${currentMonthIndex + 1} of ${unsyncedMonths.length}...`
@@ -452,7 +526,7 @@ export default function ToastSyncStatusPage() {
                 key={month.label}
                 className={cn(
                   'flex items-center justify-between p-3 rounded-lg transition-colors',
-                  month.status === 'syncing' && 'bg-blue-50 dark:bg-blue-950/20',
+                  (month.status === 'syncing' || month.status === 'resyncing') && 'bg-blue-50 dark:bg-blue-950/20',
                   month.status === 'synced' && 'bg-green-50/50 dark:bg-green-950/10',
                   month.status === 'error' && 'bg-red-50/50 dark:bg-red-950/10',
                   month.status === 'queued' && 'bg-muted/30',
@@ -467,7 +541,7 @@ export default function ToastSyncStatusPage() {
                     {month.status === 'queued' && (
                       <div className="w-2 h-2 rounded-full bg-blue-400/50" />
                     )}
-                    {month.status === 'syncing' && (
+                    {(month.status === 'syncing' || month.status === 'resyncing') && (
                       <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                     )}
                     {month.status === 'synced' && (
@@ -483,7 +557,7 @@ export default function ToastSyncStatusPage() {
                         'font-medium',
                         month.status === 'not_synced' && 'text-muted-foreground',
                         month.status === 'queued' && 'text-muted-foreground',
-                        month.status === 'syncing' && 'text-blue-700 dark:text-blue-400',
+                        (month.status === 'syncing' || month.status === 'resyncing') && 'text-blue-700 dark:text-blue-400',
                         month.status === 'error' && 'text-red-700 dark:text-red-400'
                       )}
                     >
@@ -496,25 +570,38 @@ export default function ToastSyncStatusPage() {
                 </div>
                 <div className="text-right text-sm">
                   {month.status === 'synced' && (
-                    <div className="text-muted-foreground">
-                      <span className="font-medium tabular-nums">
-                        {formatCurrency(month.netSales)}
-                      </span>
-                      {' · '}
-                      <span className="tabular-nums">{month.orderCount.toLocaleString()} orders</span>
-                      {month.syncedAt && (
-                        <span className="block text-xs">
-                          Synced {format(new Date(month.syncedAt), 'MMM d, h:mm a')}
+                    <div className="flex items-center gap-3">
+                      <div className="text-muted-foreground text-right">
+                        <span className="font-medium tabular-nums">
+                          {formatCurrency(month.netSales)}
                         </span>
-                      )}
+                        {' · '}
+                        <span className="tabular-nums">{month.orderCount.toLocaleString()} orders</span>
+                        {month.syncedAt && (
+                          <span className="block text-xs">
+                            Synced {format(new Date(month.syncedAt), 'MMM d, h:mm a')}
+                          </span>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => resyncSingleMonth(month.label)}
+                        disabled={isSyncing || isResyncingAll}
+                        className="h-7 px-2 text-muted-foreground hover:text-foreground"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                      </Button>
                     </div>
                   )}
-                  {month.status === 'syncing' && (
+                  {(month.status === 'syncing' || month.status === 'resyncing') && (
                     <span className="text-blue-600 dark:text-blue-400 tabular-nums">
                       {month.ordersLoaded !== undefined
                         ? `${month.ordersLoaded.toLocaleString()} orders loaded...`
                         : month.processingDay !== undefined
                         ? `Processing day ${month.processingDay}/${month.processingTotalDays}...`
+                        : month.status === 'resyncing'
+                        ? 'Re-syncing...'
                         : 'Connecting...'}
                     </span>
                   )}
