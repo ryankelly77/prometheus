@@ -223,8 +223,8 @@ export default function IntelligenceProfilePage() {
       // Fetch integrations
       const integrationsRes = await fetch(`/api/locations/${locationId}`)
       const locationData = await integrationsRes.json()
-      if (locationData.integrations) {
-        setIntegrations(locationData.integrations.map((int: { type: string; status: string; lastSyncAt?: string }) => ({
+      if (locationData.location?.integrations) {
+        setIntegrations(locationData.location.integrations.map((int: { type: string; status: string; lastSyncAt?: string }) => ({
           type: int.type,
           status: int.status,
           lastSyncAt: int.lastSyncAt,
@@ -757,7 +757,7 @@ export default function IntelligenceProfilePage() {
         </CardHeader>
         <CardContent className="space-y-3">
           {/* Toast POS */}
-          {integrations.find(i => i.type === 'TOAST') ? (
+          {integrations.find(i => i.type === 'TOAST' && i.status === 'CONNECTED') ? (
             <div className="flex items-center justify-between p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
               <div className="flex items-center gap-3">
                 <CheckCircle2 className="h-5 w-5 text-green-600" />
@@ -768,7 +768,7 @@ export default function IntelligenceProfilePage() {
                   </p>
                 </div>
               </div>
-              <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard/settings')}>
+              <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard/settings?tab=integrations')}>
                 Manage
                 <ExternalLink className="h-3 w-3 ml-1" />
               </Button>
@@ -782,7 +782,7 @@ export default function IntelligenceProfilePage() {
                   <p className="text-xs text-muted-foreground">Not connected</p>
                 </div>
               </div>
-              <Button variant="outline" size="sm" onClick={() => router.push('/dashboard/settings')}>
+              <Button variant="outline" size="sm" onClick={() => router.push('/dashboard/settings?tab=integrations')}>
                 Connect
               </Button>
             </div>

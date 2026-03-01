@@ -45,6 +45,14 @@ export async function GET(
             name: true,
           },
         },
+        integrations: {
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            lastSyncAt: true,
+          },
+        },
       },
     });
 

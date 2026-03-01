@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowRight, TrendingUp, TrendingDown, Sparkles, AlertTriangle } from "lucide-react";
+import { ArrowRight, TrendingUp, TrendingDown, Sparkles } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "@/hooks/use-location";
@@ -237,66 +237,69 @@ function SalesSnapshotCard({
   return (
     <Card>
       <CardContent className="p-6 space-y-6">
-        {/* Main rows */}
-        <div className="space-y-4">
+        {/* Sales rows - aligned grid layout */}
+        <div className="space-y-3">
           {/* Yesterday or Last open day */}
           {yesterday && (
-            <div className="space-y-1">
-              {!yesterday.wasYesterday && (
-                <p className="text-xs text-muted-foreground">
-                  {yesterday.date}
-                </p>
-              )}
-              <div className="flex items-baseline justify-between gap-4">
-                <span className="text-sm text-muted-foreground shrink-0">
+            <div className="grid grid-cols-[100px_1fr] gap-4 items-baseline">
+              <div>
+                <span className="text-sm text-muted-foreground">
                   {yesterday.wasYesterday ? "Yesterday" : extractDayFromDate(yesterday.date)}
                 </span>
-                <div className="flex items-baseline gap-3 text-right">
-                  <span className="text-xl font-semibold tabular-nums">
-                    {formatCurrency(yesterday.netSales)}
-                  </span>
-                  <span className="text-sm text-muted-foreground">
-                    {getComparisonText(yesterday.comparison, yesterday.comparisonDetail)}{" "}
-                    <span className="text-xs">({yesterday.comparisonDetail})</span>
-                  </span>
-                </div>
+                {!yesterday.wasYesterday && (
+                  <p className="text-xs text-muted-foreground/70">{yesterday.date.replace(/^Last open day: /, '')}</p>
+                )}
+              </div>
+              <div className="flex items-baseline justify-between gap-4">
+                <span className="text-xl font-semibold tabular-nums">
+                  {formatCurrency(yesterday.netSales)}
+                </span>
+                <span className="text-sm text-muted-foreground text-right">
+                  {getComparisonText(yesterday.comparison, yesterday.comparisonDetail)}
+                </span>
               </div>
             </div>
           )}
 
           {/* This week */}
-          <div className="flex items-baseline justify-between gap-4">
-            <span className="text-sm text-muted-foreground shrink-0">This week</span>
-            <div className="flex items-baseline gap-3 text-right">
+          <div className="grid grid-cols-[100px_1fr] gap-4 items-baseline">
+            <span className="text-sm text-muted-foreground">This week</span>
+            <div className="flex items-baseline justify-between gap-4">
               <span className="text-xl font-semibold tabular-nums">
                 {formatCurrency(thisWeek.totalSoFar)}
               </span>
-              <span className="text-sm text-muted-foreground">
+              <span className="text-sm text-muted-foreground text-right">
                 On track for ~{formatCurrency(thisWeek.projectedTotal)}
               </span>
             </div>
           </div>
 
           {/* This month */}
-          <div className="flex items-baseline justify-between gap-4">
-            <span className="text-sm text-muted-foreground shrink-0">This month</span>
-            <div className="flex items-baseline gap-3 text-right">
+          <div className="grid grid-cols-[100px_1fr] gap-4 items-baseline">
+            <span className="text-sm text-muted-foreground">This month</span>
+            <div className="flex items-baseline justify-between gap-4">
               <span className="text-xl font-semibold tabular-nums">
                 {formatCurrency(thisMonth.total)}
               </span>
-              {thisMonth.vsLastMonth && (
-                <span className="text-sm text-muted-foreground">
+              {/* Only show comparison after day 3 to avoid misleading "down 100%" on day 1 */}
+              {thisMonth.vsLastMonth && thisMonth.daysIntoMonth > 3 && (
+                <span className="text-sm text-muted-foreground text-right flex items-center gap-1">
                   {thisMonth.vsLastMonth.pct >= 0 ? (
                     <>
-                      <TrendingUp className="inline h-3 w-3 text-emerald-500 mr-1" />
-                      Up {Math.abs(thisMonth.vsLastMonth.pct)}% from {thisMonth.vsLastMonth.lastMonthName}
+                      <TrendingUp className="h-3 w-3 text-emerald-500" />
+                      <span>Up {Math.abs(thisMonth.vsLastMonth.pct)}%</span>
                     </>
                   ) : (
                     <>
-                      <TrendingDown className="inline h-3 w-3 text-red-500 mr-1" />
-                      Down {Math.abs(thisMonth.vsLastMonth.pct)}% from {thisMonth.vsLastMonth.lastMonthName}
+                      <TrendingDown className="h-3 w-3 text-red-500" />
+                      <span>Down {Math.abs(thisMonth.vsLastMonth.pct)}%</span>
                     </>
                   )}
+                </span>
+              )}
+              {thisMonth.daysIntoMonth <= 3 && (
+                <span className="text-sm text-muted-foreground text-right">
+                  {thisMonth.daysIntoMonth} day{thisMonth.daysIntoMonth !== 1 ? 's' : ''} in
                 </span>
               )}
             </div>
@@ -308,7 +311,7 @@ function SalesSnapshotCard({
           <div className="pt-4 border-t space-y-1 text-sm text-muted-foreground">
             {thisMonth.bestDay && (
               <p>
-                Best day this month: {thisMonth.bestDay.date} — {formatCurrency(thisMonth.bestDay.amount)}
+                Best day: <span className="font-medium">{thisMonth.bestDay.date}</span> — {formatCurrency(thisMonth.bestDay.amount)}
                 {thisMonth.bestDay.note && (
                   <span className="ml-1 text-xs">({thisMonth.bestDay.note})</span>
                 )}
@@ -316,7 +319,7 @@ function SalesSnapshotCard({
             )}
             {thisMonth.slowestDay && (
               <p>
-                Slowest day: {thisMonth.slowestDay.date} — {formatCurrency(thisMonth.slowestDay.amount)}
+                Slowest: <span className="font-medium">{thisMonth.slowestDay.date}</span> — {formatCurrency(thisMonth.slowestDay.amount)}
               </p>
             )}
           </div>
@@ -335,10 +338,7 @@ function AlertCard({ alert }: { alert: NonNullable<OverviewData["alert"]> }) {
             {alert.icon}
           </div>
           <div className="space-y-1">
-            <p className="font-medium flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-600" />
-              {alert.headline}
-            </p>
+            <p className="font-medium">{alert.headline}</p>
             <p className="text-sm text-muted-foreground leading-relaxed">
               {alert.detail}
             </p>
