@@ -79,10 +79,11 @@ export default function ToastSyncStatusPage() {
   const hasAutoStarted = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  // Re-sync all months state
+  // Re-sync state
   const [isResyncingAll, setIsResyncingAll] = useState(false)
   const [resyncCompletedCount, setResyncCompletedCount] = useState(0)
   const [resyncTotalCount, setResyncTotalCount] = useState(0)
+  const [resyncingSingleMonth, setResyncingSingleMonth] = useState<string | null>(null)
 
   // Fetch initial sync status
   useEffect(() => {
@@ -314,9 +315,11 @@ export default function ToastSyncStatusPage() {
       setMonths(prev => prev.map(m =>
         m.label === monthLabel ? { ...m, status: 'resyncing' as const } : m
       ))
+      setResyncingSingleMonth(monthLabel)
       setIsSyncing(true)
       await syncMonth(month)
       setIsSyncing(false)
+      setResyncingSingleMonth(null)
     }
   }
 
@@ -454,7 +457,7 @@ export default function ToastSyncStatusPage() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">Overall Progress</CardTitle>
-            {isSyncing && (
+            {(isSyncing && !resyncingSingleMonth) && (
               <span className="text-sm text-muted-foreground">
                 Elapsed: {formatDuration(elapsedTime)}
               </span>
@@ -462,10 +465,12 @@ export default function ToastSyncStatusPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Progress value={isSyncing ? overallProgress : (syncedMonths.length / 12) * 100} className="h-3" />
+          <Progress value={(isSyncing && !resyncingSingleMonth) ? overallProgress : (syncedMonths.length / 12) * 100} className="h-3" />
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">
-              {isResyncingAll
+              {resyncingSingleMonth
+                ? `Re-syncing ${resyncingSingleMonth}...`
+                : isResyncingAll
                 ? `Re-syncing... ${resyncCompletedCount} of ${resyncTotalCount} months complete`
                 : isComplete
                 ? 'All months synced'
