@@ -368,8 +368,9 @@ export default function SalesDataPage() {
     fetchIntegrationStatus()
   }, [currentLocation, locations])
 
-  // Use real data if available, otherwise fall back to mock
-  const dailyData = hasRealData ? realData : mockDailyData
+  // Use real data if available. Only fall back to mock if NO integration is connected (demo mode)
+  // If integration exists but no data for this period, show empty state instead of mock
+  const dailyData = hasRealData ? realData : (integrationId ? [] : mockDailyData)
 
   // Calculate MTD totals
   const mtdTotals = useMemo(() => {
@@ -675,6 +676,18 @@ export default function SalesDataPage() {
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           <span className="ml-2 text-muted-foreground">Loading sales data...</span>
+        </div>
+      ) : dailyData.length === 0 && integrationId ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center border rounded-lg bg-muted/30">
+          <RefreshCw className="h-12 w-12 text-muted-foreground/50 mb-4" />
+          <h3 className="text-lg font-medium mb-2">No data for this period</h3>
+          <p className="text-muted-foreground mb-4 max-w-md">
+            There&apos;s no synced sales data for the selected month. Sync now to import data from Toast.
+          </p>
+          <Button onClick={handleResyncMonth} disabled={isResyncing}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${isResyncing ? 'animate-spin' : ''}`} />
+            Sync This Month
+          </Button>
         </div>
       ) : (
       <div className="rounded-md border">
