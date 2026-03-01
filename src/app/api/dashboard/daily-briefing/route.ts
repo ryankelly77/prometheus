@@ -38,6 +38,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const locationId = searchParams.get("locationId");
+  const forceRefresh = searchParams.get("refresh") === "true";
 
   if (!locationId) {
     return NextResponse.json(
@@ -68,23 +69,34 @@ export async function GET(request: NextRequest) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const cached = await prisma.dailyBriefing.findUnique({
-      where: {
-        locationId_briefingDate: {
+    // Delete cached briefing if force refresh requested
+    if (forceRefresh) {
+      console.log("[Daily Briefing] Force refresh requested, deleting cache for", location.name);
+      await prisma.dailyBriefing.deleteMany({
+        where: {
           locationId,
           briefingDate: today,
         },
-      },
-    });
-
-    if (cached) {
-      console.log("[Daily Briefing] Returning cached briefing for", location.name);
-      return NextResponse.json({
-        alert: cached.alert as AlertData | null,
-        opportunity: cached.opportunity as OpportunityData | null,
-        cached: true,
-        generatedAt: cached.generatedAt.toISOString(),
       });
+    } else {
+      const cached = await prisma.dailyBriefing.findUnique({
+        where: {
+          locationId_briefingDate: {
+            locationId,
+            briefingDate: today,
+          },
+        },
+      });
+
+      if (cached) {
+        console.log("[Daily Briefing] Returning cached briefing for", location.name);
+        return NextResponse.json({
+          alert: cached.alert as AlertData | null,
+          opportunity: cached.opportunity as OpportunityData | null,
+          cached: true,
+          generatedAt: cached.generatedAt.toISOString(),
+        });
+      }
     }
 
     // Check if Claude is configured
@@ -469,21 +481,26 @@ ${data.recentAnomalies.map((a) => `- ${a.date}: $${a.sales.toLocaleString()} (${
 
 Generate exactly TWO items:
 
-1. ALERT: The single most important thing the owner should know today. This could be:
-   - A weather impact coming in the next 1-3 days
-   - A concerning trend in the last 7 days
-   - An unusual drop or spike yesterday
-   - A comparison that's noteworthy (e.g., "3rd slow Monday in a row")
-   If nothing is concerning, this can be a positive callout instead.
+1. ALERT: The single most important thing the owner should know today.
+2. OPPORTUNITY: One specific, actionable thing they could do this week.
 
-2. OPPORTUNITY: One specific, actionable thing they could do this week to improve revenue. Base this on their actual data patterns, not generic advice. Reference specific numbers.
+CRITICAL FORMATTING RULES:
+- Each item is MAX 2-3 sentences. No exceptions.
+- Write like you're texting the owner, not writing a report.
+- First sentence: the finding (with one specific number).
+- Second sentence: why it matters or what to do about it.
+- Third sentence (optional): estimated impact.
+- NO analysis of multiple possibilities ("either X, or Y, or Z")
+- NO hedging ("however, without data, it's impossible to determine")
+- NO cultural commentary or industry context
+- Pick ONE clear takeaway and state it directly.
+- Use plain language a high schooler would understand.
 
-Rules:
-- Write in plain English. No restaurant jargon.
-- Be specific — use actual dollar amounts and dates.
-- Keep each item to 2-3 sentences max.
-- Sound like a smart advisor, not a report.
-- Don't repeat insights they've already seen.`;
+BAD example (too long, too analytical):
+"February is tracking $77,046 behind January at $516,197 versus $593,243—a 13% decline. With today being the last Saturday of the month, you'd need an exceptional day to close this gap. Even accounting for February having fewer days, the daily average is noticeably softer than last month's performance."
+
+GOOD example (concise, direct):
+"February is running 13% behind January — you're at $516K vs $593K last month. Today's the last Saturday to close the gap."`;
 
   if (data.previousInsights.length > 0) {
     prompt += `
@@ -499,12 +516,12 @@ Return as JSON:
   "alert": {
     "type": "weather|trend|anomaly|positive",
     "icon": "⚠️|🌧️|📉|🎉",
-    "headline": "5 words max",
-    "detail": "2-3 sentences with specific numbers"
+    "headline": "8 words max",
+    "detail": "2-3 sentences max. Under 50 words total."
   },
   "opportunity": {
-    "headline": "5 words max",
-    "detail": "2-3 sentences with specific numbers",
+    "headline": "8 words max",
+    "detail": "2-3 sentences max. Under 50 words total.",
     "estimatedImpact": "$X/week or $X/month"
   }
 }`;
