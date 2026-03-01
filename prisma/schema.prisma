@@ -107,6 +107,7 @@ model Location {
   websiteVisibility   WebsiteVisibility[]
   restaurantProfile   RestaurantProfile?
   insightFeedback     InsightFeedback[]
+  dailyBriefings      DailyBriefing[]
 
   @@index([restaurantGroupId])
 }
@@ -899,6 +900,23 @@ model AIUsage {
   @@unique([organizationId, month])
   @@index([organizationId])
   @@index([month])
+}
+
+model DailyBriefing {
+  id           String   @id @default(cuid())
+  locationId   String
+  briefingDate DateTime @db.Date
+  alert        Json?    // { type, icon, headline, detail }
+  opportunity  Json?    // { headline, detail, estimatedImpact }
+  inputData    Json?    // The data sent to Claude for debugging
+  model        String?  // Claude model used
+  tokensUsed   Int?
+  generatedAt  DateTime @default(now())
+  location     Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, briefingDate])
+  @@index([locationId])
+  @@index([briefingDate])
 }
 
 model DemoFeedback {
