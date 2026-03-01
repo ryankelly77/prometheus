@@ -382,20 +382,20 @@ function QuickActions() {
   return (
     <div className="flex flex-wrap gap-3 pt-4">
       <Button variant="outline" size="sm" asChild>
+        <Link href="/dashboard/reports">
+          Charts & Reports
+          <ArrowRight className="ml-2 h-3 w-3" />
+        </Link>
+      </Button>
+      <Button variant="outline" size="sm" asChild>
         <Link href="/dashboard/intelligence">
-          View All Insights
+          AI Insights
           <ArrowRight className="ml-2 h-3 w-3" />
         </Link>
       </Button>
       <Button variant="outline" size="sm" asChild>
-        <Link href="/dashboard/sales">
-          Sales Details
-          <ArrowRight className="ml-2 h-3 w-3" />
-        </Link>
-      </Button>
-      <Button variant="outline" size="sm" asChild>
-        <Link href="/dashboard/health-score">
-          Health Score
+        <Link href="/dashboard/settings">
+          Settings
           <ArrowRight className="ml-2 h-3 w-3" />
         </Link>
       </Button>

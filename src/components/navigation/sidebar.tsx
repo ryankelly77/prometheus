@@ -20,6 +20,7 @@ import {
   HelpCircle,
   ChevronLeft,
   ChevronRight,
+  BarChart3,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -45,6 +46,7 @@ const iconMap: Record<string, LucideIcon> = {
   Newspaper,
   Settings,
   HelpCircle,
+  BarChart3,
 }
 
 type NavLinkItem = {
@@ -72,6 +74,7 @@ const navigation: NavItem[] = [
   { name: 'Health Score', href: '/dashboard/health-score', icon: 'Target' },
   { name: 'Intelligence', href: '/dashboard/intelligence', icon: 'Brain' },
   { type: 'separator', label: 'Operations' },
+  { name: 'Reports', href: '/dashboard/reports', icon: 'BarChart3' },
   { name: 'Sales', href: '/dashboard/sales', icon: 'DollarSign' },
   { name: 'Costs', href: '/dashboard/costs', icon: 'Receipt' },
   { name: 'Customers', href: '/dashboard/customers', icon: 'Users' },
