@@ -506,21 +506,43 @@ model WeatherData {
   id            String            @id @default(cuid())
   locationId    String
   date          DateTime          @db.Date
+
+  // Temperature (Fahrenheit)
   tempHigh      Float?
   tempLow       Float?
   tempAvg       Float?
   feelsLikeHigh Float?
   feelsLikeLow  Float?
-  precipitation Float?
-  precipProb    Float?
-  snowfall      Float?
-  weatherCode   Int?
-  condition     WeatherCondition?
-  humidity      Float?
+
+  // Precipitation (inches)
+  precipitation      Float?            // Total for the day (inches)
+  precipProb         Float?            // Probability 0-100
+  precipitationHours Int?              // Hours with precipitation
+  rainInches         Float?            // Rain only (excludes snow)
+  snowfall           Float?            // Snowfall inches
+
+  // Conditions
+  weatherCode        Int?              // WMO weather code from Open-Meteo
+  condition          WeatherCondition?
+  weatherDescription String?           // Human readable: "Clear", "Rain", etc.
+
+  // Wind (mph)
   windSpeed     Float?
+  windSpeedMax  Float?                // Max wind speed for the day
   windGusts     Float?
+
+  // Other
+  humidity      Float?
   cloudCover    Float?
   uvIndex       Float?
+
+  // Derived flags (useful for quick queries)
+  isRainy         Boolean  @default(false)  // precipitation > 0.1 inches
+  isExtremeHeat   Boolean  @default(false)  // tempHigh > 95
+  isExtremeCold   Boolean  @default(false)  // tempLow < 32
+  isSevereWeather Boolean  @default(false)  // thunderstorm, ice, heavy snow
+
+  // Metadata
   isActual      Boolean           @default(false)
   forecastedAt  DateTime?
   createdAt     DateTime          @default(now())
@@ -1030,6 +1052,9 @@ model TransactionSummary {
   avgTip           Decimal?  @db.Decimal(10, 2)
   tipPercent       Decimal?  @db.Decimal(5, 2)
   transactionCount Int       @default(0)
+  // Raw components for reconciliation (stored for debugging without re-syncing)
+  serviceCharges   Decimal   @default(0) @db.Decimal(12, 2) // For reference - not subtracted from netSales
+  deferredRevenue  Decimal   @default(0) @db.Decimal(12, 2) // Subtracted from netSales (gift cards, deposits)
   syncedAt         DateTime? // When this record was last synced from POS
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
