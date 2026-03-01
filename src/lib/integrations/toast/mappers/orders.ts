@@ -531,9 +531,10 @@ function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): n
 
     totalRefundsApplied += checkRefunds;
 
-    // Net = check.amount - serviceCharges - discounts - refunds
+    // Net = check.amount - serviceCharges - refunds
+    // NO discount subtraction - check.amount already has discounts applied (Toast's post-discount subtotal)
     // NO deferred subtraction - Toast includes deferred in Net Sales
-    totalRevenue += checkAmount - checkServiceCharges - checkDiscounts - checkRefunds;
+    totalRevenue += checkAmount - checkServiceCharges - checkRefunds;
   }
 
   return totalRevenue;
@@ -795,9 +796,10 @@ export function aggregateOrdersToTransactions(
       }
       existing.refunds += checkRefunds;
 
-      // Net = gross - serviceCharges - discounts - refunds
+      // Net = gross - serviceCharges - refunds
+      // NO discount subtraction - check.amount already has discounts applied (Toast's post-discount subtotal)
       // NO deferred subtraction - Toast includes deferred in Net Sales
-      existing.netSales += checkGross - checkServiceCharges - checkDiscounts - checkRefunds;
+      existing.netSales += checkGross - checkServiceCharges - checkRefunds;
     }
 
     aggregates.set(key, existing);
