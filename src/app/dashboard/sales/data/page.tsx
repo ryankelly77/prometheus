@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, Fragment, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { startOfMonth, endOfMonth, format, formatDistanceToNow } from 'date-fns'
+import { startOfMonth, endOfMonth, startOfDay, endOfDay, format, formatDistanceToNow } from 'date-fns'
 import {
   RefreshCw,
   MoreHorizontal,
@@ -516,7 +516,71 @@ export default function SalesDataPage() {
   }, [integrationId, currentPeriod])
 
   const handleResyncRow = async (id: string, date: string) => {
-    toast.success(`Sync triggered for ${formatDate(date)}`)
+    if (!integrationId) {
+      toast.error('No integration connected')
+      return
+    }
+
+    setIsResyncing(true)
+
+    try {
+      // Parse the date and sync just that one day
+      const targetDate = new Date(date)
+      const startDate = startOfDay(targetDate)
+      const endDate = endOfDay(targetDate)
+
+      const params = new URLSearchParams({
+        integrationId,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+      })
+
+      toast.info(`Syncing ${formatDate(date)}...`)
+
+      const response = await fetch(`/api/integrations/toast/sync/stream?${params}`)
+
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        throw new Error('No response body')
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6)) as SyncProgress
+              if (data.phase === 'complete') {
+                toast.success(`Synced ${formatDate(date)}: ${data.ordersProcessed} orders`)
+                setRefreshKey(prev => prev + 1)
+              } else if (data.phase === 'error') {
+                toast.error(data.error || 'Sync failed')
+              }
+            } catch {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Sync error:', error)
+      toast.error(error instanceof Error ? error.message : 'Sync failed')
+    } finally {
+      setIsResyncing(false)
+    }
   }
 
   const handleEditRow = (id: string) => {
