@@ -4,6 +4,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import {
   analyzeWeatherCorrelations,
   getWeatherSummaryForAI,
+  getClimateContext,
   type WeatherCorrelation,
 } from "@/lib/weather/correlations";
 
@@ -132,8 +133,11 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Generate AI-friendly summary
-    const aiSummary = getWeatherSummaryForAI(correlation);
+    // Generate AI-friendly summary with climate context
+    const climateContext = (location.latitude && location.longitude)
+      ? getClimateContext(location.latitude, location.longitude)
+      : undefined;
+    const aiSummary = getWeatherSummaryForAI(correlation, climateContext);
 
     return NextResponse.json({
       location: location.name,
@@ -142,6 +146,7 @@ export async function GET(request: NextRequest) {
       analyzedAt: new Date().toISOString(),
       correlation,
       aiSummary,
+      climateContext,
     });
   } catch (error) {
     console.error("[Weather Correlations] Error:", error);

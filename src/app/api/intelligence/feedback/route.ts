@@ -61,6 +61,26 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Update insight status based on feedback
+    if (data.rating === "helpful") {
+      // Pin the insight and extend expiration to 30 days
+      await prisma.aIInsight.update({
+        where: { id: data.insightId },
+        data: {
+          status: "pinned",
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+      });
+    } else if (data.rating === "not_helpful" || data.rating === "incorrect") {
+      // Hide the insight immediately
+      await prisma.aIInsight.update({
+        where: { id: data.insightId },
+        data: {
+          status: "hidden",
+        },
+      });
+    }
+
     // Generate profile suggestions based on feedback
     let suggestions: string[] = [];
 

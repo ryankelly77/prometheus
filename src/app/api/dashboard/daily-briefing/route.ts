@@ -3,6 +3,15 @@ import Anthropic from "@anthropic-ai/sdk";
 import prisma from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/require-role";
 import type { Prisma } from "@/generated/prisma";
+import { fetchForecast } from "@/lib/weather/open-meteo";
+import { analyzeWeatherCorrelations, getClimateContext } from "@/lib/weather/correlations";
+import {
+  calculateConfidence,
+  getHedgeInstructions,
+  formatConfidenceBar,
+  type IntelligenceConfidence,
+} from "@/lib/intelligence/confidence";
+import { AI_RULES } from "@/lib/ai/prompts";
 
 const anthropic = new Anthropic();
 
@@ -55,6 +64,17 @@ export async function GET(request: NextRequest) {
         restaurantGroup: true,
         restaurantProfile: true,
       },
+      // Also select lat/lng/timezone for weather
+    });
+
+    // Get lat/lng separately since we need specific fields
+    const locationWithCoords = await prisma.location.findUnique({
+      where: { id: locationId },
+      select: {
+        latitude: true,
+        longitude: true,
+        timezone: true,
+      },
     });
 
     if (!location) {
@@ -90,11 +110,31 @@ export async function GET(request: NextRequest) {
 
       if (cached) {
         console.log("[Daily Briefing] Returning cached briefing for", location.name);
+
+        // Calculate confidence for cached response too
+        let cachedConfidence: IntelligenceConfidence | undefined;
+        try {
+          cachedConfidence = await calculateConfidence(locationId);
+        } catch (confError) {
+          console.log("[Daily Briefing] Confidence calculation skipped:", confError instanceof Error ? confError.message : "Unknown error");
+        }
+
         return NextResponse.json({
           alert: cached.alert as AlertData | null,
           opportunity: cached.opportunity as OpportunityData | null,
           cached: true,
           generatedAt: cached.generatedAt.toISOString(),
+          confidence: cachedConfidence ? {
+            score: cachedConfidence.score,
+            level: cachedConfidence.level,
+            disclaimer: cachedConfidence.disclaimer,
+            connectedLayers: cachedConfidence.connectedLayers,
+            missingLayers: cachedConfidence.missingLayers.map((l) => ({ id: l.id, label: l.label })),
+            nextRecommended: cachedConfidence.nextRecommended ? {
+              id: cachedConfidence.nextRecommended.id,
+              label: cachedConfidence.nextRecommended.label,
+            } : null,
+          } : null,
         });
       }
     }
@@ -111,7 +151,20 @@ export async function GET(request: NextRequest) {
     }
 
     // Gather data for the briefing
-    const briefingData = await gatherBriefingData(locationId, location);
+    const briefingData = await gatherBriefingData(locationId, {
+      latitude: locationWithCoords?.latitude ?? null,
+      longitude: locationWithCoords?.longitude ?? null,
+      timezone: locationWithCoords?.timezone ?? null,
+      restaurantProfile: location.restaurantProfile,
+    });
+
+    // Calculate intelligence confidence
+    let confidence: IntelligenceConfidence | undefined;
+    try {
+      confidence = await calculateConfidence(locationId);
+    } catch (confError) {
+      console.log("[Daily Briefing] Confidence calculation skipped:", confError instanceof Error ? confError.message : "Unknown error");
+    }
 
     // Generate briefing using Claude
     console.log("[Daily Briefing] Generating new briefing for", location.name);
@@ -119,7 +172,8 @@ export async function GET(request: NextRequest) {
       location.name,
       location.restaurantType,
       location.restaurantProfile,
-      briefingData
+      briefingData,
+      confidence
     );
 
     // Cache the result
@@ -140,6 +194,17 @@ export async function GET(request: NextRequest) {
       opportunity,
       cached: false,
       generatedAt: new Date().toISOString(),
+      confidence: confidence ? {
+        score: confidence.score,
+        level: confidence.level,
+        disclaimer: confidence.disclaimer,
+        connectedLayers: confidence.connectedLayers,
+        missingLayers: confidence.missingLayers.map((l) => ({ id: l.id, label: l.label })),
+        nextRecommended: confidence.nextRecommended ? {
+          id: confidence.nextRecommended.id,
+          label: confidence.nextRecommended.label,
+        } : null,
+      } : null,
     });
   } catch (error) {
     console.error("[Daily Briefing] Error:", error);
@@ -154,6 +219,33 @@ export async function GET(request: NextRequest) {
 // ============================================================================
 // Data Gathering
 // ============================================================================
+
+interface ForecastDay {
+  date: string;
+  dayOfWeek: string;
+  weatherDescription: string;
+  tempHigh: number;
+  tempLow: number;
+  precipitation: number;
+  isRainy: boolean;
+  isExtremeHeat: boolean;
+  isExtremeCold: boolean;
+  isSevereWeather: boolean;
+  // Calculated from historical correlations
+  expectedImpactPct: number | null;
+  expectedSales: number | null;
+  normalSales: number | null;
+}
+
+interface WeatherCorrelations {
+  rainImpactPct: number;
+  extremeHeatImpactPct: number;
+  extremeColdImpactPct: number;
+  tempSweetSpot: { min: number; max: number };
+  hasOutdoorSeating: boolean;
+  outdoorNote: string | null;
+  climateContext: string | null;
+}
 
 interface BriefingInputData {
   todayFormatted: string;
@@ -172,7 +264,11 @@ interface BriefingInputData {
   lastMonthName: string;
   dowAverages: Record<string, number>;
   recentAnomalies: Array<{ date: string; sales: number; expected: number; pctDiff: number }>;
+  // Legacy weather data from database (fallback)
   weather: Array<{ date: string; condition: string; precipProb: number; tempHigh: number }> | null;
+  // New: Fresh 7-day forecast with expected impacts
+  forecast: ForecastDay[] | null;
+  weatherCorrelations: WeatherCorrelations | null;
   previousInsights: string[];
   userContext: string[];
   conceptDescription: string | null;
@@ -180,7 +276,12 @@ interface BriefingInputData {
 
 async function gatherBriefingData(
   locationId: string,
-  location: { restaurantProfile: { conceptDescription: string | null; userContext: string[] } | null }
+  location: {
+    latitude: number | null;
+    longitude: number | null;
+    timezone: string | null;
+    restaurantProfile: { conceptDescription: string | null; userContext: string[] } | null;
+  }
 ): Promise<BriefingInputData> {
   const now = new Date();
   const today = new Date(now);
@@ -302,7 +403,7 @@ async function gatherBriefingData(
     }
   }
 
-  // Get weather data for next 3 days
+  // Get weather data for next 3 days (fallback from database)
   const threeDaysFromNow = new Date(today);
   threeDaysFromNow.setDate(today.getDate() + 3);
 
@@ -325,6 +426,78 @@ async function gatherBriefingData(
         tempHigh: Math.round(w.tempHigh || 70),
       }))
     : null;
+
+  // Fetch fresh 7-day forecast and weather correlations
+  let forecast: ForecastDay[] | null = null;
+  let weatherCorrelations: WeatherCorrelations | null = null;
+
+  if (location.latitude && location.longitude) {
+    try {
+      // Fetch weather correlations for impact calculations
+      const correlations = await analyzeWeatherCorrelations(locationId);
+
+      if (correlations.totalDaysAnalyzed > 0) {
+        weatherCorrelations = {
+          rainImpactPct: correlations.adjustedRainImpactPct,
+          extremeHeatImpactPct: correlations.adjustedExtremeHeatImpactPct,
+          extremeColdImpactPct: correlations.adjustedExtremeColdImpactPct,
+          tempSweetSpot: correlations.tempSweetSpot,
+          hasOutdoorSeating: correlations.outdoorImpact?.hasOutdoorSeating ?? false,
+          outdoorNote: correlations.outdoorImpact?.note ?? null,
+          climateContext: getClimateContext(location.latitude, location.longitude),
+        };
+      }
+
+      // Fetch 7-day forecast
+      const rawForecast = await fetchForecast(
+        location.latitude,
+        location.longitude,
+        7,
+        location.timezone || undefined
+      );
+
+      forecast = rawForecast.map((day) => {
+        const dayOfWeek = new Date(day.date).toLocaleDateString("en-US", { weekday: "long" });
+
+        // Calculate expected impact based on weather type
+        let expectedImpactPct: number | null = null;
+        if (day.isSevereWeather && weatherCorrelations) {
+          expectedImpactPct = -30; // Severe weather typically major impact
+        } else if (day.isExtremeHeat && weatherCorrelations) {
+          expectedImpactPct = weatherCorrelations.extremeHeatImpactPct;
+        } else if (day.isExtremeCold && weatherCorrelations) {
+          expectedImpactPct = weatherCorrelations.extremeColdImpactPct;
+        } else if (day.isRainy && weatherCorrelations) {
+          expectedImpactPct = weatherCorrelations.rainImpactPct;
+        }
+
+        // Calculate expected sales based on DOW average and impact
+        const normalSales = dowAverages[dayOfWeek] || null;
+        let expectedSales: number | null = null;
+        if (normalSales && expectedImpactPct !== null && expectedImpactPct < 0) {
+          expectedSales = Math.round(normalSales * (1 + expectedImpactPct / 100));
+        }
+
+        return {
+          date: day.date,
+          dayOfWeek,
+          weatherDescription: day.weatherDescription,
+          tempHigh: Math.round(day.tempHigh),
+          tempLow: Math.round(day.tempLow),
+          precipitation: day.precipitationInches,
+          isRainy: day.isRainy,
+          isExtremeHeat: day.isExtremeHeat,
+          isExtremeCold: day.isExtremeCold,
+          isSevereWeather: day.isSevereWeather,
+          expectedImpactPct,
+          expectedSales,
+          normalSales,
+        };
+      });
+    } catch (weatherError) {
+      console.log("[Daily Briefing] Weather fetch skipped:", weatherError instanceof Error ? weatherError.message : "Unknown error");
+    }
+  }
 
   // Get previous insights to avoid repetition
   const previousInsights = await prisma.aIInsight.findMany({
@@ -359,6 +532,8 @@ async function gatherBriefingData(
     dowAverages,
     recentAnomalies,
     weather,
+    forecast,
+    weatherCorrelations,
     previousInsights: previousHeadlines,
     userContext,
     conceptDescription,
@@ -373,9 +548,19 @@ async function generateBriefing(
   restaurantName: string,
   restaurantType: string | null,
   profile: { conceptDescription: string | null; userContext: string[] } | null,
-  data: BriefingInputData
+  data: BriefingInputData,
+  confidence?: IntelligenceConfidence
 ): Promise<{ alert: AlertData | null; opportunity: OpportunityData | null; tokensUsed: number }> {
-  const prompt = buildBriefingPrompt(restaurantName, restaurantType, profile, data);
+  const prompt = buildBriefingPrompt(restaurantName, restaurantType, profile, data, confidence);
+
+  // Build system prompt with hedge instructions
+  let systemPrompt = `You are a restaurant business advisor. Generate concise, actionable daily briefings based on actual sales data. Always return valid JSON.
+${AI_RULES}`;
+
+  if (confidence) {
+    const hedgeInstructions = getHedgeInstructions(confidence);
+    systemPrompt += `\n\n== DATA CONFIDENCE ==\nData completeness: ${confidence.score}% (${confidence.level})\n${confidence.disclaimer}\n\n${hedgeInstructions}`;
+  }
 
   if (process.env.NODE_ENV === "development") {
     console.log("[Daily Briefing] === PROMPT ===");
@@ -392,7 +577,7 @@ async function generateBriefing(
         content: prompt,
       },
     ],
-    system: "You are a restaurant business advisor. Generate concise, actionable daily briefings based on actual sales data. Always return valid JSON.",
+    system: systemPrompt,
   });
 
   const tokensUsed = (message.usage?.input_tokens || 0) + (message.usage?.output_tokens || 0);
@@ -432,13 +617,24 @@ function buildBriefingPrompt(
   restaurantName: string,
   restaurantType: string | null,
   profile: { conceptDescription: string | null; userContext: string[] } | null,
-  data: BriefingInputData
+  data: BriefingInputData,
+  confidence?: IntelligenceConfidence
 ): string {
   const restaurantTypeLabel = restaurantType
     ? restaurantType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
     : "Restaurant";
 
-  let prompt = `You are a restaurant advisor giving a daily briefing to the owner of ${restaurantName}.
+  let prompt = `You are a restaurant advisor giving a daily briefing to the owner of ${restaurantName}.`;
+
+  // Add confidence summary
+  if (confidence) {
+    prompt += `
+
+Data Completeness: ${formatConfidenceBar(confidence.score)} (${confidence.level})
+${confidence.disclaimer}`;
+  }
+
+  prompt += `
 
 Restaurant Profile:
 ${restaurantTypeLabel}${profile?.conceptDescription ? ` · ${profile.conceptDescription}` : ""}
@@ -463,7 +659,70 @@ ${Object.entries(data.dowAverages)
   .map(([day, avg]) => `- ${day}: $${avg.toLocaleString()}`)
   .join("\n")}`;
 
-  if (data.weather && data.weather.length > 0) {
+  // Weather intelligence section
+  if (data.forecast && data.forecast.length > 0) {
+    const todayWeather = data.forecast[0];
+    const tomorrowWeather = data.forecast[1];
+
+    prompt += `
+
+== WEATHER INTELLIGENCE ==
+
+Today's weather: ${todayWeather.weatherDescription}, High ${todayWeather.tempHigh}°F, ${todayWeather.precipitation}" expected
+Tomorrow: ${tomorrowWeather?.weatherDescription || "Unknown"}, High ${tomorrowWeather?.tempHigh || "?"}°F
+
+This week's forecast:
+${data.forecast.map((d) => {
+  let line = `- ${d.dayOfWeek}: ${d.weatherDescription}, ${d.tempHigh}°F, ${d.precipitation}" precip`;
+  if (d.expectedImpactPct !== null && d.expectedImpactPct < -3 && d.normalSales && d.expectedSales) {
+    line += ` — expect ~$${d.expectedSales.toLocaleString()} instead of usual $${d.normalSales.toLocaleString()} (${d.expectedImpactPct}%)`;
+  }
+  return line;
+}).join("\n")}`;
+
+    // Add historical impact context
+    if (data.weatherCorrelations) {
+      const wc = data.weatherCorrelations;
+      prompt += `
+
+Historical weather impact for this restaurant:
+- Rain reduces sales by ${wc.rainImpactPct}% (DOW-adjusted)
+- Extreme heat (>95°F) reduces sales by ${wc.extremeHeatImpactPct}%
+- Extreme cold (<32°F) reduces sales by ${wc.extremeColdImpactPct}%
+- Optimal temp range: ${wc.tempSweetSpot.min}-${wc.tempSweetSpot.max}°F`;
+
+      if (wc.hasOutdoorSeating && wc.outdoorNote) {
+        prompt += `
+- ${wc.outdoorNote}`;
+      }
+    }
+
+    // Find days with weather alerts this week
+    const weatherAlertDays = data.forecast.filter(
+      (d) => d.expectedImpactPct !== null && d.expectedImpactPct < -5
+    );
+
+    if (weatherAlertDays.length > 0) {
+      prompt += `
+
+⚠️ WEATHER ALERT: ${weatherAlertDays.length} day(s) this week have significant weather impact:
+${weatherAlertDays.map((d) => {
+  const reason = d.isSevereWeather
+    ? "severe weather"
+    : d.isExtremeHeat
+      ? "extreme heat"
+      : d.isExtremeCold
+        ? "extreme cold"
+        : d.isRainy
+          ? "rain"
+          : "weather";
+  return `- ${d.dayOfWeek}: ${reason} — expect ~$${d.expectedSales?.toLocaleString() || "?"} instead of usual $${d.normalSales?.toLocaleString() || "?"}`;
+}).join("\n")}
+
+If rain or extreme weather is in the forecast, calculate the expected dollar impact using the historical percentages and mention it in the alert. Be specific: "Rain Thursday — expect ~$X instead of usual $Y based on your rainy-day average."`;
+    }
+  } else if (data.weather && data.weather.length > 0) {
+    // Fallback to old weather data format
     prompt += `
 
 Weather forecast:

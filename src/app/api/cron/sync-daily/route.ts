@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { createToastClient } from "@/lib/integrations/toast/client";
 import { getToastConfig } from "@/lib/integrations/toast/auth";
 import { updateDataFacts } from "@/lib/ai/claude";
+import { fetchHistoricalWeather } from "@/lib/weather/open-meteo";
 import {
   aggregateOrdersByDaypart,
   mapDaypartAggregatesToPrisma,
@@ -26,6 +27,7 @@ interface SyncResult {
   success: boolean;
   yesterdayOrders?: number;
   todayOrders?: number;
+  weatherSynced?: boolean;
   error?: string;
 }
 
@@ -75,6 +77,10 @@ export async function GET(request: NextRequest) {
             id: true,
             name: true,
             isActive: true,
+            weatherEnabled: true,
+            latitude: true,
+            longitude: true,
+            timezone: true,
           },
         },
       },
@@ -116,7 +122,13 @@ export async function GET(request: NextRequest) {
         integration.location.id,
         integration.location.name,
         yesterday,
-        now
+        now,
+        {
+          weatherEnabled: integration.location.weatherEnabled,
+          latitude: integration.location.latitude,
+          longitude: integration.location.longitude,
+          timezone: integration.location.timezone,
+        }
       );
       results.push(result);
     }
@@ -144,6 +156,13 @@ export async function GET(request: NextRequest) {
   }
 }
 
+interface WeatherInfo {
+  weatherEnabled: boolean;
+  latitude: number | null;
+  longitude: number | null;
+  timezone: string | null;
+}
+
 /**
  * Sync a single location's Toast data for the given date range
  */
@@ -152,7 +171,8 @@ async function syncLocation(
   locationId: string,
   locationName: string,
   startDate: Date,
-  endDate: Date
+  endDate: Date,
+  weatherInfo: WeatherInfo
 ): Promise<SyncResult> {
   console.log(`[Cron Sync] Starting sync for ${locationName}...`);
 
@@ -340,6 +360,91 @@ async function syncLocation(
       // Non-critical, continue
     }
 
+    // Sync weather data if weather is enabled
+    let weatherSynced = false;
+    if (weatherInfo.weatherEnabled && weatherInfo.latitude && weatherInfo.longitude) {
+      try {
+        console.log(`[Cron Sync] ${locationName}: Syncing weather data...`);
+
+        // Get yesterday's date as string
+        const yesterdayStr = startDate.toISOString().slice(0, 10);
+        const todayStr = new Date(endDate).toISOString().slice(0, 10);
+
+        // Fetch weather for yesterday and today
+        const weatherData = await fetchHistoricalWeather(
+          weatherInfo.latitude,
+          weatherInfo.longitude,
+          yesterdayStr,
+          todayStr,
+          weatherInfo.timezone || "America/Chicago"
+        );
+
+        // Store weather data
+        for (const day of weatherData) {
+          const weatherDate = new Date(day.date);
+
+          await prisma.weatherData.upsert({
+            where: {
+              locationId_date: {
+                locationId,
+                date: weatherDate,
+              },
+            },
+            update: {
+              tempHigh: day.tempHigh,
+              tempLow: day.tempLow,
+              tempAvg: day.tempMean,
+              precipitation: day.precipitationInches,
+              precipitationHours: day.precipitationHours,
+              rainInches: day.rainInches,
+              snowfall: day.snowfallInches,
+              weatherCode: day.weatherCode,
+              weatherDescription: day.weatherDescription,
+              windSpeedMax: day.windSpeedMaxMph,
+              isRainy: day.isRainy,
+              isExtremeHeat: day.isExtremeHeat,
+              isExtremeCold: day.isExtremeCold,
+              isSevereWeather: day.isSevereWeather,
+              isActual: true,
+            },
+            create: {
+              locationId,
+              date: weatherDate,
+              tempHigh: day.tempHigh,
+              tempLow: day.tempLow,
+              tempAvg: day.tempMean,
+              precipitation: day.precipitationInches,
+              precipitationHours: day.precipitationHours,
+              rainInches: day.rainInches,
+              snowfall: day.snowfallInches,
+              weatherCode: day.weatherCode,
+              weatherDescription: day.weatherDescription,
+              windSpeedMax: day.windSpeedMaxMph,
+              isRainy: day.isRainy,
+              isExtremeHeat: day.isExtremeHeat,
+              isExtremeCold: day.isExtremeCold,
+              isSevereWeather: day.isSevereWeather,
+              isActual: true,
+            },
+          });
+        }
+
+        weatherSynced = true;
+        console.log(`[Cron Sync] ${locationName}: Weather synced (${weatherData.length} days)`);
+      } catch (weatherError) {
+        console.error(`[Cron Sync] ${locationName}: Failed to sync weather:`, weatherError);
+        // Non-critical, continue
+      }
+    }
+
+    // Check for stale insights and auto-refresh
+    try {
+      await refreshStaleInsights(locationId, locationName, weatherInfo.weatherEnabled);
+    } catch (insightError) {
+      console.error(`[Cron Sync] ${locationName}: Failed to refresh insights:`, insightError);
+      // Non-critical, continue
+    }
+
     console.log(`[Cron Sync] ${locationName}: Sync complete. Yesterday: ${yesterdayOrders} orders, Today: ${todayOrders} orders`);
 
     return {
@@ -348,6 +453,7 @@ async function syncLocation(
       success: true,
       yesterdayOrders,
       todayOrders,
+      weatherSynced,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -373,5 +479,89 @@ async function syncLocation(
       success: false,
       error: errorMessage,
     };
+  }
+}
+
+/**
+ * Check for stale insights and auto-refresh if all insights in a layer are expired
+ */
+async function refreshStaleInsights(
+  locationId: string,
+  locationName: string,
+  weatherEnabled: boolean
+): Promise<void> {
+  const now = new Date();
+  const layers = weatherEnabled ? ["sales", "weather"] : ["sales"];
+
+  for (const layer of layers) {
+    // Get active insights for this layer
+    const activeInsights = await prisma.aIInsight.findMany({
+      where: {
+        locationId,
+        layer,
+        status: { in: ["active", "pinned"] },
+      },
+      select: {
+        id: true,
+        status: true,
+        expiresAt: true,
+      },
+    });
+
+    // Check if all are stale (expired and not pinned)
+    const allStale = activeInsights.length > 0 && activeInsights.every(
+      (i) => i.status === "active" && i.expiresAt && new Date(i.expiresAt) < now
+    );
+
+    const noInsights = activeInsights.length === 0;
+
+    if (allStale || noInsights) {
+      console.log(`[Cron Sync] ${locationName}: Auto-refreshing ${layer} insights (${allStale ? "all stale" : "none exist"})`);
+
+      // Archive old active insights
+      await prisma.aIInsight.updateMany({
+        where: {
+          locationId,
+          layer,
+          status: "active",
+        },
+        data: {
+          status: "archived",
+          isCurrent: false,
+        },
+      });
+
+      // Trigger insight generation via internal fetch
+      // Note: In production, you might want to use a proper queue system
+      try {
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : "http://localhost:3000";
+
+        const response = await fetch(`${baseUrl}/api/intelligence/generate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // Use internal API secret for cron-triggered generation
+            "X-Internal-Secret": process.env.INTERNAL_API_SECRET || "",
+          },
+          body: JSON.stringify({
+            locationId,
+            dataType: "combined",
+            layer,
+            forceNew: true,
+          }),
+        });
+
+        if (response.ok) {
+          console.log(`[Cron Sync] ${locationName}: Successfully auto-refreshed ${layer} insights`);
+        } else {
+          const error = await response.text();
+          console.error(`[Cron Sync] ${locationName}: Failed to auto-refresh ${layer} insights:`, error);
+        }
+      } catch (fetchError) {
+        console.error(`[Cron Sync] ${locationName}: Error calling insight generation:`, fetchError);
+      }
+    }
   }
 }

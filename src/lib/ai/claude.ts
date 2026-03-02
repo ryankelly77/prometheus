@@ -7,7 +7,14 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import prisma from "@/lib/prisma";
-import { analyzeWeatherCorrelations } from "@/lib/weather/correlations";
+import { analyzeWeatherCorrelations, getClimateContext } from "@/lib/weather/correlations";
+import { fetchForecast } from "@/lib/weather/open-meteo";
+import {
+  calculateConfidence,
+  getHedgeInstructions,
+  type IntelligenceConfidence,
+} from "@/lib/intelligence/confidence";
+import { AI_RULES } from "./prompts";
 
 // Initialize the client (uses ANTHROPIC_API_KEY env var by default)
 const anthropic = new Anthropic();
@@ -95,15 +102,69 @@ export const RESTAURANT_TYPE_CONTEXT: Record<RestaurantType, RestaurantTypeConte
   },
 };
 
+export interface WeatherDriverFact {
+  factor: string; // 'extreme_heat', 'rain', 'extreme_cold', 'severe_weather'
+  label: string; // 'Extreme Heat (>95°F)', 'Rain', etc.
+  impactPct: number; // DOW-adjusted impact percentage
+  daysAffected: number; // annualized days affected
+  estimatedAnnualLoss: number; // projected annual revenue impact
+  rank: number; // 1 = biggest impact
+}
+
+export interface WeatherAnomaly {
+  date: string;
+  dayOfWeek: string;
+  sales: number;
+  expectedSales: number;
+  pctDiff: number;
+  weatherDescription: string;
+  tempHigh: number;
+  precipitation: number;
+  explanation: string;
+}
+
+export interface ForecastDay {
+  date: string;
+  dayOfWeek: string;
+  weatherDescription: string;
+  tempHigh: number;
+  tempLow: number;
+  precipitation: number;
+  isRainy: boolean;
+  isExtremeHeat: boolean;
+  isExtremeCold: boolean;
+  isSevereWeather: boolean;
+  expectedImpact?: string; // e.g., "Rain expected to reduce sales ~5%"
+}
+
 export interface WeatherFacts {
+  // Analysis period
+  periodStart: string;
+  periodEnd: string;
+  totalDaysAnalyzed: number;
+  // Ranked weather drivers (most impactful first)
+  weatherDrivers: WeatherDriverFact[];
+  avgDailyRevenue: number;
+  // Rain impact details
   rainImpactPct: number; // DOW-adjusted
   rainyDayCount: number;
   estimatedRainLoss: number; // over the analysis period
+  // Temperature impact
   tempSweetSpot: { min: number; max: number };
   extremeHeatImpactPct: number;
+  extremeHeatDayCount: number;
   extremeColdImpactPct: number;
+  extremeColdDayCount: number;
   severeWeatherEvents: number;
-  weatherExplainedAnomalies: number; // count of sales anomalies explained by weather
+  // Anomalies explained by weather (detailed)
+  weatherExplainedAnomalies: WeatherAnomaly[];
+  // 7-day forecast with expected impacts
+  forecast: ForecastDay[];
+  // Outdoor seating
+  hasOutdoorSeating: boolean;
+  outdoorNote?: string;
+  // Regional context
+  climateContext?: string;
   analyzedAt: string;
 }
 
@@ -385,15 +446,104 @@ export async function calculateDataFacts(locationId: string): Promise<DataFacts>
   try {
     const weatherCorrelation = await analyzeWeatherCorrelations(locationId);
     if (weatherCorrelation.totalDaysAnalyzed > 0) {
+      // Get location coordinates for climate context and forecast
+      const location = await prisma.location.findUnique({
+        where: { id: locationId },
+        select: { latitude: true, longitude: true, timezone: true },
+      });
+
+      const climateContext =
+        location?.latitude && location?.longitude
+          ? getClimateContext(location.latitude, location.longitude)
+          : undefined;
+
+      // Fetch 7-day forecast with expected impacts
+      let forecast: WeatherFacts["forecast"] = [];
+      if (location?.latitude && location?.longitude) {
+        try {
+          const rawForecast = await fetchForecast(
+            location.latitude,
+            location.longitude,
+            7,
+            location.timezone || undefined
+          );
+          forecast = rawForecast.map((day) => {
+            // Calculate expected impact based on historical correlations
+            let expectedImpact: string | undefined;
+            if (day.isSevereWeather) {
+              expectedImpact = `Severe weather may significantly reduce sales`;
+            } else if (day.isExtremeHeat && weatherCorrelation.adjustedExtremeHeatImpactPct < -5) {
+              expectedImpact = `Extreme heat expected to reduce sales ~${Math.abs(weatherCorrelation.adjustedExtremeHeatImpactPct)}%`;
+            } else if (day.isExtremeCold && weatherCorrelation.adjustedExtremeColdImpactPct < -5) {
+              expectedImpact = `Extreme cold expected to reduce sales ~${Math.abs(weatherCorrelation.adjustedExtremeColdImpactPct)}%`;
+            } else if (day.isRainy && weatherCorrelation.adjustedRainImpactPct < -3) {
+              expectedImpact = `Rain expected to reduce sales ~${Math.abs(weatherCorrelation.adjustedRainImpactPct)}%`;
+            }
+
+            return {
+              date: day.date,
+              dayOfWeek: new Date(day.date).toLocaleDateString("en-US", { weekday: "long" }),
+              weatherDescription: day.weatherDescription,
+              tempHigh: Math.round(day.tempHigh),
+              tempLow: Math.round(day.tempLow),
+              precipitation: day.precipitationInches,
+              isRainy: day.isRainy,
+              isExtremeHeat: day.isExtremeHeat,
+              isExtremeCold: day.isExtremeCold,
+              isSevereWeather: day.isSevereWeather,
+              expectedImpact,
+            };
+          });
+        } catch (forecastError) {
+          console.log("[DataFacts] Forecast fetch skipped:", forecastError instanceof Error ? forecastError.message : "Unknown error");
+        }
+      }
+
       weather = {
+        // Analysis period
+        periodStart: weatherCorrelation.periodStart,
+        periodEnd: weatherCorrelation.periodEnd,
+        totalDaysAnalyzed: weatherCorrelation.totalDaysAnalyzed,
+        // Ranked weather drivers (most impactful first)
+        weatherDrivers: weatherCorrelation.weatherDrivers.map((d) => ({
+          factor: d.factor,
+          label: d.label,
+          impactPct: d.impactPct,
+          daysAffected: d.daysAffected,
+          estimatedAnnualLoss: d.estimatedAnnualLoss,
+          rank: d.rank,
+        })),
+        avgDailyRevenue: weatherCorrelation.avgDailyRevenue,
+        // Rain impact details
         rainImpactPct: weatherCorrelation.adjustedRainImpactPct,
         rainyDayCount: weatherCorrelation.rainyDayCount,
         estimatedRainLoss: weatherCorrelation.estimatedRainLoss,
+        // Temperature impact
         tempSweetSpot: weatherCorrelation.tempSweetSpot,
         extremeHeatImpactPct: weatherCorrelation.adjustedExtremeHeatImpactPct,
+        extremeHeatDayCount: weatherCorrelation.extremeHeatDayCount,
         extremeColdImpactPct: weatherCorrelation.adjustedExtremeColdImpactPct,
+        extremeColdDayCount: weatherCorrelation.extremeColdDayCount,
         severeWeatherEvents: weatherCorrelation.severeWeatherDays.length,
-        weatherExplainedAnomalies: weatherCorrelation.weatherExplainedAnomalies.length,
+        // Detailed anomalies
+        weatherExplainedAnomalies: weatherCorrelation.weatherExplainedAnomalies.map((a) => ({
+          date: a.date,
+          dayOfWeek: a.dayOfWeek,
+          sales: a.sales,
+          expectedSales: a.expectedSales,
+          pctDiff: a.pctDiff,
+          weatherDescription: a.weatherDescription,
+          tempHigh: a.tempHigh,
+          precipitation: a.precipitation,
+          explanation: a.explanation,
+        })),
+        // 7-day forecast
+        forecast,
+        // Outdoor seating
+        hasOutdoorSeating: weatherCorrelation.outdoorImpact?.hasOutdoorSeating ?? false,
+        outdoorNote: weatherCorrelation.outdoorImpact?.note,
+        // Regional context
+        climateContext,
         analyzedAt: new Date().toISOString(),
       };
     }
@@ -443,16 +593,28 @@ export async function updateDataFacts(locationId: string): Promise<DataFacts> {
   return facts;
 }
 
-function buildSystemPrompt(): string {
-  return `You are an expert restaurant analytics consultant who provides highly tailored, actionable insights. Your role is to analyze restaurant data and provide personalized recommendations that respect the restaurant's unique identity and context.
+function buildSystemPrompt(confidence?: IntelligenceConfidence): string {
+  const hedgeInstructions = confidence ? getHedgeInstructions(confidence) : "";
 
+  let prompt = `You are an expert restaurant analytics consultant who provides highly tailored, actionable insights. Your role is to analyze restaurant data and provide personalized recommendations that respect the restaurant's unique identity and context.
+${AI_RULES}
 Guidelines:
 - Be specific and actionable - never give generic advice
 - Use actual numbers from the data provided
 - Respect the operator's stated context as ground truth
 - Tailor recommendations to both the restaurant TYPE (financial benchmarks) and CONCEPT (brand identity)
 - Focus on opportunities, not just observations
-- Each insight should have a clear, implementable recommendation
+- Each insight should have a clear, implementable recommendation`;
+
+  // Add confidence-based hedge instructions
+  if (hedgeInstructions) {
+    prompt += `
+
+== DATA CONFIDENCE GUIDANCE ==
+${hedgeInstructions}`;
+  }
+
+  prompt += `
 
 CRITICAL: Return your response as valid JSON with this exact structure:
 {
@@ -462,9 +624,14 @@ CRITICAL: Return your response as valid JSON with this exact structure:
   "recommendations": ["specific actionable recommendation 1", "recommendation 2"],
   "dataQuality": "excellent|good|limited"
 }`;
+
+  return prompt;
 }
 
-function buildUserPrompt(request: IntelligenceRequest): string {
+function buildUserPrompt(
+  request: IntelligenceRequest,
+  confidence?: IntelligenceConfidence
+): string {
   const parts: string[] = [];
   const typeContext = request.restaurantType ? RESTAURANT_TYPE_CONTEXT[request.restaurantType] : null;
   const profile = request.profile;
@@ -498,6 +665,20 @@ function buildUserPrompt(request: IntelligenceRequest): string {
     parts.push(`Target Customer: ${profile.targetDemographic}`);
   }
   parts.push("");
+
+  // == INTELLIGENCE CONFIDENCE ==
+  if (confidence) {
+    parts.push("== INTELLIGENCE CONFIDENCE ==");
+    parts.push(`Data Completeness: ${confidence.score}% (${confidence.level})`);
+    parts.push(`Connected Sources: ${confidence.connectedLayers.join(", ") || "None"}`);
+    if (confidence.missingLayers.length > 0) {
+      const missingLabels = confidence.missingLayers.slice(0, 3).map((l) => l.label);
+      parts.push(`Missing Sources: ${missingLabels.join(", ")}`);
+    }
+    parts.push(`Hedge Level: ${confidence.hedgeLevel}`);
+    parts.push(confidence.disclaimer);
+    parts.push("");
+  }
 
   // == TYPE vs CONCEPT GUIDANCE ==
   if (typeContext && profile?.conceptDescription) {
@@ -581,6 +762,91 @@ function buildUserPrompt(request: IntelligenceRequest): string {
       parts.push(`Seasonal Peak: ${dataFacts.seasonalPeak}`);
     }
     parts.push("");
+
+    // == WEATHER INTELLIGENCE ==
+    if (dataFacts.weather && dataFacts.weather.totalDaysAnalyzed > 0) {
+      const w = dataFacts.weather;
+      parts.push("== WEATHER INTELLIGENCE ==");
+      parts.push(`Analysis period: ${w.periodStart} to ${w.periodEnd} (${w.totalDaysAnalyzed} days)`);
+      parts.push("");
+
+      // Ranked weather drivers
+      if (w.weatherDrivers.length > 0) {
+        parts.push("Weather Drivers (ranked by estimated annual revenue impact):");
+        for (const driver of w.weatherDrivers) {
+          parts.push(
+            `  #${driver.rank} ${driver.label}: ${driver.impactPct}% impact × ${driver.daysAffected} days/year = ~$${driver.estimatedAnnualLoss.toLocaleString()}/year lost`
+          );
+        }
+        parts.push("");
+      }
+
+      // Rain impact details
+      parts.push("Rain Impact (DOW-adjusted):");
+      parts.push(`- Rainy days reduce sales by ${w.rainImpactPct}%`);
+      parts.push(`- ${w.rainyDayCount} rainy days in analysis period`);
+      parts.push(`- Estimated revenue lost to rain: $${w.estimatedRainLoss.toLocaleString()}`);
+      parts.push("");
+
+      // Temperature impact
+      parts.push("Temperature Impact:");
+      parts.push(`- Optimal temperature range: ${w.tempSweetSpot.min}-${w.tempSweetSpot.max}°F`);
+      if (w.extremeHeatDayCount > 0) {
+        parts.push(`- Extreme heat (>95°F) impact: ${w.extremeHeatImpactPct}% on ${w.extremeHeatDayCount} days`);
+      }
+      if (w.extremeColdDayCount > 0) {
+        parts.push(`- Extreme cold (<32°F) impact: ${w.extremeColdImpactPct}% on ${w.extremeColdDayCount} days`);
+      }
+      if (w.severeWeatherEvents > 0) {
+        parts.push(`- Severe weather events: ${w.severeWeatherEvents}`);
+      }
+      parts.push("");
+
+      // Outdoor seating
+      if (w.hasOutdoorSeating && w.outdoorNote) {
+        parts.push(`Outdoor Seating: ${w.outdoorNote}`);
+        parts.push("");
+      }
+
+      // Weather-explained anomalies
+      if (w.weatherExplainedAnomalies.length > 0) {
+        parts.push("Previously Unexplained Anomalies Now Explained by Weather:");
+        for (const a of w.weatherExplainedAnomalies.slice(0, 5)) {
+          const diffStr = a.pctDiff > 0 ? `+${a.pctDiff}%` : `${a.pctDiff}%`;
+          parts.push(
+            `- ${a.date} (${a.dayOfWeek}): Sales $${a.sales.toLocaleString()} (${diffStr} vs expected $${a.expectedSales.toLocaleString()}) — ${a.weatherDescription}, ${a.tempHigh}°F, ${a.precipitation}" precip`
+          );
+        }
+        parts.push("");
+      }
+
+      // 7-day forecast
+      if (w.forecast.length > 0) {
+        parts.push("7-Day Forecast:");
+        for (const day of w.forecast) {
+          let line = `- ${day.date} (${day.dayOfWeek}): ${day.weatherDescription}, High ${day.tempHigh}°F, ${day.precipitation}" precip`;
+          if (day.expectedImpact) {
+            line += ` — ${day.expectedImpact}`;
+          }
+          parts.push(line);
+        }
+        parts.push("");
+      }
+
+      // Regional climate context
+      if (w.climateContext) {
+        parts.push(w.climateContext);
+        parts.push("");
+      }
+
+      // Instructions for AI
+      parts.push("When generating insights:");
+      parts.push("- Reference specific weather events that explain sales anomalies");
+      parts.push("- If a previous insight flagged an unexplained anomaly, SOLVE IT with weather data");
+      parts.push("- Use the forecast to predict impact on upcoming days");
+      parts.push("- Compare weather-adjusted performance (how did they do GIVEN the weather) vs raw performance");
+      parts.push("");
+    }
   }
 
   // == CURRENT PERIOD DATA ==
@@ -711,8 +977,16 @@ export async function generateIntelligence(
     }
   }
 
-  const userPrompt = buildUserPrompt(enhancedRequest);
-  const systemPrompt = buildSystemPrompt();
+  // Calculate intelligence confidence for this location
+  let confidence: IntelligenceConfidence | undefined;
+  try {
+    confidence = await calculateConfidence(request.locationId);
+  } catch (error) {
+    console.log("[Claude] Confidence calculation skipped:", error instanceof Error ? error.message : "Unknown error");
+  }
+
+  const userPrompt = buildUserPrompt(enhancedRequest, confidence);
+  const systemPrompt = buildSystemPrompt(confidence);
 
   // Log the prompt for debugging (remove in production)
   if (process.env.NODE_ENV === "development") {

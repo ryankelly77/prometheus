@@ -78,6 +78,17 @@ model Location {
   restaurantType      String?              // fine_dining, casual_dining, fast_casual, quick_service, cafe, bar_pub, bistro, ethnic_specialty, food_truck, buffet, family_style, ghost_kitchen
   isActive            Boolean              @default(true)
   isDefault           Boolean              @default(false)
+
+  // Data source connection flags (for intelligence confidence calculation)
+  // These are set explicitly when a user connects an integration, not inferred from data
+  salesEnabled        Boolean              @default(false)  // POS/Toast connected
+  weatherEnabled      Boolean              @default(false)  // Weather intelligence enabled
+  costsEnabled        Boolean              @default(false)  // Accounting integration (QuickBooks/Xero/R365)
+  eventsEnabled       Boolean              @default(false)  // Local events feed connected
+  customersEnabled    Boolean              @default(false)  // Reservations/CRM connected (OpenTable, Resy)
+  reviewsEnabled      Boolean              @default(false)  // Review aggregation connected
+  visibilityEnabled   Boolean              @default(false)  // SEO/visibility tracking connected
+
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   aiInsights          AIInsight[]
@@ -108,6 +119,7 @@ model Location {
   restaurantProfile   RestaurantProfile?
   insightFeedback     InsightFeedback[]
   dailyBriefings      DailyBriefing[]
+  revenueCenterMetrics RevenueCenterMetrics[]
 
   @@index([restaurantGroupId])
 }
@@ -855,6 +867,7 @@ model AIInsight {
   batchId         String?           // Groups insights from the same generation
   isCurrent       Boolean           @default(true) // Current batch vs historical
   layer           String?           @db.VarChar(50) // 'sales', 'weather', 'events', 'costs'
+  status          String            @default("active") @db.VarChar(20) // 'active', 'pinned', 'stale', 'hidden', 'archived'
   insightType     String?           @db.VarChar(30) // 'trend', 'anomaly', 'opportunity', 'recommendation'
   periodType      InsightPeriod
   periodStart     DateTime
@@ -897,6 +910,7 @@ model AIInsight {
   @@index([locationId, generatedAt])
   @@index([locationId, isCurrent])
   @@index([locationId, batchId])
+  @@index([locationId, layer, status])
   @@index([promptId])
   @@index([isRead, isDismissed])
 }
@@ -1063,6 +1077,26 @@ model TransactionSummary {
   @@unique([locationId, date])
   @@index([locationId, date])
   @@index([locationId, syncedAt])
+}
+
+model RevenueCenterMetrics {
+  id                 String   @id @default(cuid())
+  locationId         String
+  date               DateTime @db.Date
+  revenueCenterGuid  String   @db.VarChar(50)
+  revenueCenterName  String   @db.VarChar(100)
+  netSales           Decimal  @default(0) @db.Decimal(12, 2)
+  orderCount         Int      @default(0)
+  checkCount         Int      @default(0)
+  avgCheck           Decimal? @db.Decimal(10, 2)
+  isOutdoor          Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  location           Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, date, revenueCenterGuid])
+  @@index([locationId, date])
+  @@index([locationId, isOutdoor])
 }
 
 model CategorySales {
