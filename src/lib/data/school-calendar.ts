@@ -35,56 +35,42 @@ export interface SchoolBreak {
 
 export const SA_SCHOOL_CALENDAR_2025_2026: SchoolBreak[] = [
   // ---------------------------------------------------------------------------
-  // WINTER BREAK (all districts roughly aligned)
+  // THANKSGIVING BREAK
+  // ---------------------------------------------------------------------------
+  {
+    name: "Thanksgiving Break",
+    district: "All SA Districts",
+    startDate: "2025-11-24",
+    endDate: "2025-11-28",
+    type: "holiday_break",
+    impactNote:
+      "Full week for most districts. Wednesday before Thanksgiving is one of the biggest bar nights. Thursday most restaurants closed. Friday-Sunday recovery with shopping traffic.",
+  },
+
+  // ---------------------------------------------------------------------------
+  // WINTER BREAK (SAISD starts Dec 19, others Dec 22 — use widest window)
   // ---------------------------------------------------------------------------
   {
     name: "Winter Break",
     district: "All SA Districts",
-    startDate: "2025-12-22",
+    startDate: "2025-12-19",
     endDate: "2026-01-06",
     type: "winter_break",
     impactNote:
-      "Families off. Tourism peaks. Fine dining sees holiday reservations. Casual spots see family traffic.",
+      "Effective break period Dec 19-Jan 6 (SAISD starts early). Families off. Tourism peaks. Fine dining sees holiday reservations. Casual spots see family traffic.",
   },
 
   // ---------------------------------------------------------------------------
-  // SPRING BREAK (districts diverge — key insight for Pearl area)
+  // SPRING BREAK (ALL major districts aligned — same week)
   // ---------------------------------------------------------------------------
   {
     name: "Spring Break",
-    district: "Northside ISD",
+    district: "All SA Districts",
     startDate: "2026-03-09",
     endDate: "2026-03-13",
     type: "spring_break",
     impactNote:
-      "100K students off. Largest district. Family travel peaks, some leave town but tourism increases.",
-  },
-  {
-    name: "Spring Break",
-    district: "North East ISD",
-    startDate: "2026-03-16",
-    endDate: "2026-03-20",
-    type: "spring_break",
-    impactNote:
-      "60K students off. Staggered from Northside — extends the spring break tourism window.",
-  },
-  {
-    name: "Spring Break",
-    district: "San Antonio ISD",
-    startDate: "2026-03-09",
-    endDate: "2026-03-13",
-    type: "spring_break",
-    impactNote:
-      "45K students off. Downtown district — directly impacts Pearl area foot traffic.",
-  },
-  {
-    name: "Spring Break",
-    district: "Alamo Heights ISD",
-    startDate: "2026-03-09",
-    endDate: "2026-03-13",
-    type: "spring_break",
-    impactNote:
-      "Affluent families. Key MCC demographic. Many travel but those staying increase local dining.",
+      "All major SA districts off simultaneously. 200K+ students. Peak tourism week — River Walk, Pearl area see heavy family traffic. Restaurants should expect higher lunch volumes and tourist-driven dinner reservations.",
   },
 
   // ---------------------------------------------------------------------------
@@ -104,13 +90,13 @@ export const SA_SCHOOL_CALENDAR_2025_2026: SchoolBreak[] = [
   // UNIVERSITY CALENDARS (affect downtown/Pearl area traffic)
   // ---------------------------------------------------------------------------
   {
-    name: "UTSA Spring Break",
-    district: "UTSA",
-    startDate: "2026-03-16",
-    endDate: "2026-03-20",
+    name: "Spring Break",
+    district: "SA Universities (UTSA/Trinity/UIW)",
+    startDate: "2026-03-09",
+    endDate: "2026-03-13",
     type: "spring_break",
     impactNote:
-      "35K students. Some are local diners. Campus near downtown.",
+      "Universities aligned with K-12. Combined 50K+ college students off. Some leave town, others increase local dining and nightlife.",
   },
   {
     name: "UTSA Finals / End of Semester",
@@ -122,31 +108,13 @@ export const SA_SCHOOL_CALENDAR_2025_2026: SchoolBreak[] = [
       "Students focused on finals then leave for summer. Reduced foot traffic.",
   },
   {
-    name: "UTSA Summer Break",
-    district: "UTSA",
+    name: "University Summer Break",
+    district: "SA Universities (UTSA/Trinity/UIW)",
     startDate: "2026-05-15",
     endDate: "2026-08-24",
     type: "summer_break",
     impactNote:
-      "Many students leave SA. Reduced daytime population near campus areas.",
-  },
-  {
-    name: "Trinity University Spring Break",
-    district: "Trinity University",
-    startDate: "2026-03-09",
-    endDate: "2026-03-13",
-    type: "spring_break",
-    impactNote:
-      "Small but affluent student body. Near Alamo Heights. Some impact on upscale dining.",
-  },
-  {
-    name: "UIW Spring Break",
-    district: "UIW",
-    startDate: "2026-03-09",
-    endDate: "2026-03-13",
-    type: "spring_break",
-    impactNote:
-      "University of the Incarnate Word. Broadway corridor. Modest local dining impact.",
+      "Many students leave SA. Reduced daytime population near campus areas. UTSA downtown campus impact on Pearl area.",
   },
 ];
 
