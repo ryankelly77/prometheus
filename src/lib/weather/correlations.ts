@@ -1092,6 +1092,18 @@ export function getWeatherSummaryForAI(
     `Optimal temp range: ${correlation.tempSweetSpot.min}-${correlation.tempSweetSpot.max}°F`
   );
 
+  // Add clarification about numbers to prevent double-counting
+  lines.push("");
+  lines.push("NOTE ON NUMBERS:");
+  lines.push("- The weather driver ranking above shows impact ACROSS ALL revenue centers (e.g., heat costs ~$130K total)");
+  lines.push("- The outdoor seasonal analysis below shows TERRACE-SPECIFIC revenue swing (e.g., $336K seasonal decline)");
+  lines.push("- These are DIFFERENT metrics:");
+  lines.push("  * The seasonal decline is the TOTAL swing from peak to trough (not all attributable to weather — customer preferences, seasonal menus, etc. also factor in)");
+  lines.push("  * The weather driver impact is the DOW-adjusted WEATHER-ONLY impact");
+  lines.push("- Use the weather driver number for weather-caused impact claims");
+  lines.push("- Use the seasonal number for overall outdoor revenue patterns");
+  lines.push("- NEVER cite both in a way that contradicts. Be clear which number you're using and why.");
+
   // OUTDOOR REVENUE DATA (the strongest finding)
   const outdoor = correlation.outdoorImpact;
   if (outdoor?.hasOutdoorSeating && outdoor.annualOutdoorPct !== null) {

@@ -78,4 +78,21 @@ These rules are not suggestions. Every insight MUST follow them.
    GOOD: "$830 below your typical Friday"
 
 9. No emojis anywhere in the output.
+
+CONSISTENCY CHECK:
+
+Before outputting, verify your numbers don't contradict each other across insights.
+If one insight says heat costs $130K and another says terrace alone loses $336K to heat, that's a contradiction. Pick the right number and be consistent.
+When citing impact numbers, be clear about scope: "across all areas" vs "on the terrace alone."
+
+INSIGHT QUALITY FILTER:
+
+Before including an insight, ask: "Would the restaurant owner say 'no kidding' when reading this?"
+If yes, cut it. Examples of worthless insights:
+- Revenue was $0 on Christmas Day (they were closed — they know)
+- Weekends are busier than weekdays (obvious for any restaurant)
+- Sales were low on a day with a major ice storm (everyone knows this)
+
+Every insight must pass the "I didn't know that" or "I should act on this" test.
+An insight should either SURPRISE the owner or give them a SPECIFIC action they haven't considered.
 `;
