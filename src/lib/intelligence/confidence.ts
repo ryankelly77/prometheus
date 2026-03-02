@@ -52,7 +52,7 @@ const DATA_LAYER_DEFINITIONS: Omit<DataLayer, "connected">[] = [
     id: "events",
     label: "Local Events",
     weight: 15,
-    description: "Spurs games, concerts, festivals, conventions",
+    description: "Holidays, school calendar, Spurs games, concerts, festivals",
     enablePath: "/dashboard/settings",
   },
   {
@@ -145,6 +145,8 @@ export async function calculateConfidence(
         connected = location.weatherEnabled;
         break;
       case "events":
+        // Events layer is special: holidays + school calendar are always available
+        // SeatGeek adds additional value but is optional
         connected = location.eventsEnabled;
         break;
       case "costs":
@@ -164,10 +166,25 @@ export async function calculateConfidence(
     return { ...def, connected };
   });
 
-  // Calculate score
-  const score = layers
-    .filter((l) => l.connected)
-    .reduce((sum, l) => sum + l.weight, 0);
+  // Calculate score with special handling for events layer
+  // Events layer: Holidays + School Calendar are always on = 8% (partial)
+  //               SeatGeek connected (eventsEnabled) = full 15%
+  const EVENTS_PARTIAL_WEIGHT = 8; // holidays + school calendar always available
+  const EVENTS_FULL_WEIGHT = 15;   // with SeatGeek
+
+  let score = 0;
+  for (const layer of layers) {
+    if (layer.id === "events") {
+      // Events always get partial credit for holidays/school calendar
+      if (layer.connected) {
+        score += EVENTS_FULL_WEIGHT; // Full credit with SeatGeek
+      } else {
+        score += EVENTS_PARTIAL_WEIGHT; // Partial credit for static events
+      }
+    } else if (layer.connected) {
+      score += layer.weight;
+    }
+  }
 
   // Determine confidence level
   const level: IntelligenceConfidence["level"] =
@@ -192,8 +209,31 @@ export async function calculateConfidence(
           : "high";
 
   // Get connected and missing layers
-  const connectedLayers = layers.filter((l) => l.connected).map((l) => l.label);
-  const missingLayers = layers.filter((l) => !l.connected);
+  // Events layer is special: always partially connected (holidays/school calendar)
+  const connectedLayers: string[] = [];
+  const missingLayers: DataLayer[] = [];
+
+  for (const layer of layers) {
+    if (layer.id === "events") {
+      // Events always have partial connection (holidays/school calendar)
+      if (layer.connected) {
+        connectedLayers.push(layer.label); // Full SeatGeek connection
+      } else {
+        connectedLayers.push("Local Events (Holidays/School)"); // Partial connection
+        // Still show as "upgradeable" in missing layers
+        missingLayers.push({
+          ...layer,
+          label: "Local Events (SeatGeek)",
+          weight: EVENTS_FULL_WEIGHT - EVENTS_PARTIAL_WEIGHT, // Only the remaining weight
+          description: "Live event feeds: Spurs games, concerts, festivals",
+        });
+      }
+    } else if (layer.connected) {
+      connectedLayers.push(layer.label);
+    } else {
+      missingLayers.push(layer);
+    }
+  }
 
   // Find next recommended layer (highest weight among missing)
   const nextRecommended =
@@ -211,8 +251,10 @@ export async function calculateConfidence(
       disclaimer += `Connect ${nextRecommended.label.toLowerCase()} for more accurate insights.`;
     }
   } else {
-    const lastLayer = connectedLayers.pop();
-    disclaimer = `Based on ${connectedLayers.join(", ")} and ${lastLayer?.toLowerCase()}. `;
+    // Don't modify the original array
+    const layersCopy = [...connectedLayers];
+    const lastLayer = layersCopy.pop();
+    disclaimer = `Based on ${layersCopy.join(", ")} and ${lastLayer?.toLowerCase()}. `;
     if (nextRecommended) {
       disclaimer += `Connect ${nextRecommended.label.toLowerCase()} for fuller picture.`;
     }
@@ -221,7 +263,7 @@ export async function calculateConfidence(
   return {
     score,
     level,
-    connectedLayers: layers.filter((l) => l.connected).map((l) => l.label),
+    connectedLayers,
     missingLayers,
     nextRecommended,
     disclaimer,

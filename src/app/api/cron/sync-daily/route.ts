@@ -4,6 +4,7 @@ import { createToastClient } from "@/lib/integrations/toast/client";
 import { getToastConfig } from "@/lib/integrations/toast/auth";
 import { updateDataFacts } from "@/lib/ai/claude";
 import { fetchHistoricalWeather } from "@/lib/weather/open-meteo";
+import { fetchSanAntonioEvents } from "@/lib/events/seatgeek";
 import {
   aggregateOrdersByDaypart,
   mapDaypartAggregatesToPrisma,
@@ -28,6 +29,7 @@ interface SyncResult {
   yesterdayOrders?: number;
   todayOrders?: number;
   weatherSynced?: boolean;
+  eventsSynced?: number; // Number of SeatGeek events cached
   error?: string;
 }
 
@@ -78,6 +80,7 @@ export async function GET(request: NextRequest) {
             name: true,
             isActive: true,
             weatherEnabled: true,
+            eventsEnabled: true,
             latitude: true,
             longitude: true,
             timezone: true,
@@ -125,6 +128,7 @@ export async function GET(request: NextRequest) {
         now,
         {
           weatherEnabled: integration.location.weatherEnabled,
+          eventsEnabled: integration.location.eventsEnabled,
           latitude: integration.location.latitude,
           longitude: integration.location.longitude,
           timezone: integration.location.timezone,
@@ -156,8 +160,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-interface WeatherInfo {
+interface LocationInfo {
   weatherEnabled: boolean;
+  eventsEnabled: boolean;
   latitude: number | null;
   longitude: number | null;
   timezone: string | null;
@@ -172,7 +177,7 @@ async function syncLocation(
   locationName: string,
   startDate: Date,
   endDate: Date,
-  weatherInfo: WeatherInfo
+  locationInfo: LocationInfo
 ): Promise<SyncResult> {
   console.log(`[Cron Sync] Starting sync for ${locationName}...`);
 
@@ -362,7 +367,7 @@ async function syncLocation(
 
     // Sync weather data if weather is enabled
     let weatherSynced = false;
-    if (weatherInfo.weatherEnabled && weatherInfo.latitude && weatherInfo.longitude) {
+    if (locationInfo.weatherEnabled && locationInfo.latitude && locationInfo.longitude) {
       try {
         console.log(`[Cron Sync] ${locationName}: Syncing weather data...`);
 
@@ -372,11 +377,11 @@ async function syncLocation(
 
         // Fetch weather for yesterday and today
         const weatherData = await fetchHistoricalWeather(
-          weatherInfo.latitude,
-          weatherInfo.longitude,
+          locationInfo.latitude,
+          locationInfo.longitude,
           yesterdayStr,
           todayStr,
-          weatherInfo.timezone || "America/Chicago"
+          locationInfo.timezone || "America/Chicago"
         );
 
         // Store weather data
@@ -437,9 +442,96 @@ async function syncLocation(
       }
     }
 
+    // Sync SeatGeek events if API key is configured and location has coordinates
+    let eventsSynced = 0;
+    const seatgeekClientId = process.env.SEATGEEK_CLIENT_ID;
+    if (seatgeekClientId && locationInfo.latitude && locationInfo.longitude) {
+      try {
+        console.log(`[Cron Sync] ${locationName}: Syncing SeatGeek events...`);
+
+        // Fetch next 30 days of events
+        const today = new Date();
+        const thirtyDaysOut = new Date(today);
+        thirtyDaysOut.setDate(thirtyDaysOut.getDate() + 30);
+
+        const todayStr = today.toISOString().split("T")[0];
+        const thirtyDaysOutStr = thirtyDaysOut.toISOString().split("T")[0];
+
+        const events = await fetchSanAntonioEvents(
+          todayStr,
+          thirtyDaysOutStr,
+          locationInfo.latitude,
+          locationInfo.longitude
+        );
+
+        // Cache events in local_events table
+        for (const event of events) {
+          await prisma.localEvent.upsert({
+            where: {
+              locationId_source_externalId: {
+                locationId,
+                source: "SEATGEEK",
+                externalId: event.externalId,
+              },
+            },
+            create: {
+              locationId,
+              name: event.name,
+              date: new Date(event.date),
+              startTime: event.startTime ? new Date(`${event.date}T${event.startTime}:00`) : null,
+              venueName: event.venue,
+              venueAddress: event.venueAddress || null,
+              venueLat: event.venueLat,
+              venueLng: event.venueLon,
+              distanceMiles: event.distanceMiles,
+              category: event.category as "SPORTS" | "CONCERT" | "THEATER" | "COMEDY" | "CONVENTION" | "CONFERENCE" | "FESTIVAL" | "HOLIDAY" | "SCHOOL_BREAK" | "COMMUNITY" | "OTHER",
+              subcategory: event.subcategory || null,
+              expectedAttendance: event.estimatedAttendance || null,
+              popularityScore: event.popularity,
+              impactLevel: event.impactLevel === "high" ? "HIGH" : event.impactLevel === "medium" ? "MODERATE" : "LOW",
+              impactNote: event.impactNote,
+              source: "SEATGEEK",
+              externalId: event.externalId,
+              externalUrl: event.externalUrl,
+              rawData: event.rawData as object,
+            },
+            update: {
+              name: event.name,
+              startTime: event.startTime ? new Date(`${event.date}T${event.startTime}:00`) : null,
+              venueName: event.venue,
+              venueAddress: event.venueAddress || null,
+              distanceMiles: event.distanceMiles,
+              expectedAttendance: event.estimatedAttendance || null,
+              popularityScore: event.popularity,
+              impactLevel: event.impactLevel === "high" ? "HIGH" : event.impactLevel === "medium" ? "MODERATE" : "LOW",
+              impactNote: event.impactNote,
+              externalUrl: event.externalUrl,
+              rawData: event.rawData as object,
+              updatedAt: new Date(),
+            },
+          });
+        }
+
+        eventsSynced = events.length;
+
+        // Enable events for this location if we synced any
+        if (events.length > 0 && !locationInfo.eventsEnabled) {
+          await prisma.location.update({
+            where: { id: locationId },
+            data: { eventsEnabled: true },
+          });
+        }
+
+        console.log(`[Cron Sync] ${locationName}: SeatGeek synced (${events.length} events for next 30 days)`);
+      } catch (eventsError) {
+        console.error(`[Cron Sync] ${locationName}: Failed to sync SeatGeek events:`, eventsError);
+        // Non-critical, continue
+      }
+    }
+
     // Check for stale insights and auto-refresh
     try {
-      await refreshStaleInsights(locationId, locationName, weatherInfo.weatherEnabled);
+      await refreshStaleInsights(locationId, locationName, locationInfo.weatherEnabled);
     } catch (insightError) {
       console.error(`[Cron Sync] ${locationName}: Failed to refresh insights:`, insightError);
       // Non-critical, continue
@@ -454,6 +546,7 @@ async function syncLocation(
       yesterdayOrders,
       todayOrders,
       weatherSynced,
+      eventsSynced,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
