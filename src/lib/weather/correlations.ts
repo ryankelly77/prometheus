@@ -8,6 +8,7 @@
 
 import prisma from "@/lib/prisma";
 import { findNearbyHoliday, getHolidayContext, getSAEventContext } from "@/lib/data/holidays";
+import { aggregateStaticEvents, type NormalizedEvent } from "@/lib/events/aggregator";
 
 // =============================================================================
 // Types
@@ -92,7 +93,7 @@ export interface WeatherCorrelation {
   // Outdoor seating impact
   outdoorImpact: OutdoorImpact | null;
 
-  // Anomalies explained by weather or holidays
+  // Anomalies explained by weather, holidays, or local events
   weatherExplainedAnomalies: {
     date: string;
     dayOfWeek: string;
@@ -106,6 +107,9 @@ export interface WeatherCorrelation {
     // Holiday context
     nearbyHoliday?: string;
     likelyHolidayDriven?: boolean;
+    // Event context (non-holiday events like concerts, sports, festivals)
+    nearbyEvent?: string;
+    likelyEventDriven?: boolean;
   }[];
 }
 
@@ -573,10 +577,13 @@ function findSevereWeatherDays(
 }
 
 /**
- * Find sales anomalies that can be explained by weather OR holidays
+ * Find sales anomalies that can be explained by weather, holidays, or local events
  * An anomaly is when actual sales differ from DOW average by >20%
  *
- * IMPORTANT: Check holidays FIRST — they're the most common explanation for spikes
+ * PRIORITY ORDER:
+ * 1. Holidays (Valentine's Day, etc.) — most reliable explanation for spikes
+ * 2. Local Events (concerts, sports, festivals) — second most common
+ * 3. Weather (rain, extreme temps) — third, after ruling out events
  */
 function findWeatherExplainedAnomalies(
   data: DailyData[],
@@ -584,6 +591,41 @@ function findWeatherExplainedAnomalies(
 ): WeatherCorrelation["weatherExplainedAnomalies"] {
   const anomalies: WeatherCorrelation["weatherExplainedAnomalies"] = [];
   const ANOMALY_THRESHOLD = 20; // 20% deviation from expected
+
+  // Get date range from data for event lookup
+  if (data.length === 0) return anomalies;
+  const startDate = data[0].dateStr;
+  const endDate = data[data.length - 1].dateStr;
+
+  // Fetch all events for the analysis period (holidays, school calendar, SA events)
+  let events: NormalizedEvent[] = [];
+  try {
+    events = aggregateStaticEvents(startDate, endDate);
+  } catch (err) {
+    console.log("[Correlations] Event fetch failed, continuing without:", err);
+  }
+
+  // Build a map of events by date for quick lookup
+  const eventsByDate = new Map<string, NormalizedEvent[]>();
+  for (const event of events) {
+    const existing = eventsByDate.get(event.date) || [];
+    existing.push(event);
+    eventsByDate.set(event.date, existing);
+
+    // Also map multi-day events
+    if (event.endDate && event.endDate !== event.date) {
+      const start = new Date(event.date);
+      const end = new Date(event.endDate);
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().split("T")[0];
+        const dayEvents = eventsByDate.get(dateStr) || [];
+        if (!dayEvents.some(e => e.name === event.name)) {
+          dayEvents.push(event);
+          eventsByDate.set(dateStr, dayEvents);
+        }
+      }
+    }
+  }
 
   for (const day of data) {
     const expectedSales = dowAverages.get(day.dayOfWeek);
@@ -598,7 +640,16 @@ function findWeatherExplainedAnomalies(
     const nearbyHoliday = findNearbyHoliday(day.dateStr, 3);
     const likelyHolidayDriven = nearbyHoliday !== null && pctDiff > 0;
 
-    // Build explanation — prioritize holiday context
+    // Check for local events on this day (non-holiday events like concerts, sports, festivals)
+    const dayEvents = eventsByDate.get(day.dateStr)?.filter(
+      e => e.source !== "US_HOLIDAYS" && e.impactLevel !== "low"
+    ) || [];
+    const likelyEventDriven = dayEvents.length > 0 && pctDiff > 0;
+    const nearbyEventName = dayEvents.length > 0
+      ? dayEvents.map(e => e.name).join(", ")
+      : undefined;
+
+    // Build explanation — prioritize holiday, then events, then weather
     let explanation = "";
 
     if (likelyHolidayDriven && nearbyHoliday) {
@@ -609,6 +660,13 @@ function findWeatherExplainedAnomalies(
       if (day.tempHigh !== null && day.tempHigh >= 70 && day.tempHigh <= 85) {
         explanation += `. Weather: ${day.tempHigh}°F (favorable)`;
       }
+    } else if (likelyEventDriven && dayEvents.length > 0) {
+      // Local event is the primary driver
+      const topEvent = dayEvents[0];
+      explanation = `${topEvent.name} [${topEvent.category}/${topEvent.impactLevel}]`;
+      if (topEvent.impactNote) {
+        explanation += ` — ${topEvent.impactNote}`;
+      }
     } else if (day.isSevereWeather) {
       explanation = `Severe weather: ${day.weatherDescription}`;
     } else if (day.isRainy && pctDiff < 0) {
@@ -618,18 +676,23 @@ function findWeatherExplainedAnomalies(
     } else if (day.isExtremeCold) {
       explanation = `Extreme cold: ${day.tempLow}°F low`;
     } else if (day.tempHigh !== null && day.tempHigh >= 70 && day.tempHigh <= 85 && pctDiff > 0) {
-      // Perfect weather, but still note if near a holiday
+      // Perfect weather, but check for events or holidays
       if (nearbyHoliday) {
         explanation = `Near ${nearbyHoliday.name}. Weather: ${day.tempHigh}°F (also favorable)`;
+      } else if (dayEvents.length > 0) {
+        explanation = `${dayEvents[0].name}. Weather: ${day.tempHigh}°F (also favorable)`;
       } else {
         explanation = `Perfect weather: ${day.tempHigh}°F, ${day.weatherDescription || "clear"}`;
       }
     } else if (nearbyHoliday && pctDiff < 0) {
       // Negative anomaly near holiday (maybe day after?)
       explanation = `Near ${nearbyHoliday.name} (post-holiday dip?)`;
+    } else if (dayEvents.length > 0 && pctDiff < 0) {
+      // Negative anomaly on event day (maybe post-event hangover?)
+      explanation = `Day of ${dayEvents[0].name} (possible traffic disruption or post-event dip)`;
     }
 
-    // Include if we can explain it with weather OR holiday
+    // Include if we can explain it with weather, holiday, OR event
     if (explanation) {
       anomalies.push({
         date: day.dateStr,
@@ -643,6 +706,8 @@ function findWeatherExplainedAnomalies(
         explanation,
         nearbyHoliday: nearbyHoliday?.name,
         likelyHolidayDriven,
+        nearbyEvent: nearbyEventName,
+        likelyEventDriven,
       });
     }
   }
@@ -1138,14 +1203,16 @@ export function getWeatherSummaryForAI(
     lines.push(`Outdoor Seating: ${outdoor.note}`);
   }
 
-  // Weather/holiday-explained anomalies (top 5)
+  // Weather/holiday/event-explained anomalies (top 5)
   if (correlation.weatherExplainedAnomalies.length > 0) {
     lines.push("");
-    lines.push("Recent anomalies explained by weather or holidays:");
+    lines.push("Recent anomalies explained by weather, holidays, or events:");
     for (const anomaly of correlation.weatherExplainedAnomalies.slice(0, 5)) {
       let line = `  ${anomaly.date}: ${anomaly.pctDiff > 0 ? "+" : ""}${anomaly.pctDiff}%`;
       if (anomaly.likelyHolidayDriven) {
-        line += ` [HOLIDAY-DRIVEN: ${anomaly.nearbyHoliday}]`;
+        line += ` [HOLIDAY: ${anomaly.nearbyHoliday}]`;
+      } else if (anomaly.likelyEventDriven) {
+        line += ` [EVENT: ${anomaly.nearbyEvent}]`;
       }
       line += ` — ${anomaly.explanation}`;
       lines.push(line);
