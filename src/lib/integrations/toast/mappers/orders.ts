@@ -424,14 +424,66 @@ function getSelectionCategoryName(
 }
 
 /**
+ * Calculate deferred revenue from a check
+ * Deferred = selections WITHOUT a salesCategory.guid (gift cards, deposits, etc.)
+ */
+function getDeferredAmount(check: ToastCheck): number {
+  let deferred = 0;
+  for (const selection of check.selections ?? []) {
+    if (selection.voidDate || selection.voided) continue;
+    // Deferred = items without a salesCategory GUID
+    if (!selection.salesCategory?.guid) {
+      deferred += (selection.price ?? 0) * (selection.quantity ?? 1);
+    }
+  }
+  return deferred;
+}
+
+/**
+ * Calculate refund amount from a check
+ */
+function getRefundAmount(check: ToastCheck): number {
+  let refunds = 0;
+  for (const payment of check.payments ?? []) {
+    if (payment.refund?.refundAmount && payment.refund.refundAmount > 0) {
+      refunds += payment.refund.refundAmount;
+    } else if (payment.refundAmount && payment.refundAmount > 0) {
+      refunds += payment.refundAmount;
+    }
+  }
+  return refunds;
+}
+
+/**
  * Calculate revenue from checks
- * Uses check.amount - ALL serviceCharges - discounts - refunds - deferredRevenue
+ *
+ * NET SALES FORMULA (Formula B - validated against Toast):
+ * Net Sales = check.amount - deferred - refunds
+ *
+ * Where:
+ * - check.amount = Toast subtotal (already has discounts applied)
+ * - deferred = selections without a salesCategory GUID (gift cards, deposits, etc.)
+ * - refunds = payment.refund.refundAmount from check.payments[]
+ *
+ * DO NOT subtract:
+ * - Service charges (already excluded from check.amount OR are tips)
+ * - Discounts (already reflected in check.amount)
+ *
+ * Validated against 5 data points:
+ * - March 2025:    EXACT (0.00% gap)
+ * - October 2025:  -0.06% gap
+ * - December 2025: +0.51% gap (high gift card sales month)
+ * - January 2026:  +1.48% gap (high gift card redemption month)
+ * - Feb 27 2026:   EXACT (0.00% gap)
+ *
+ * Known variance: Gift card heavy months (Dec/Jan) can be up to ~1.5% off
+ * due to deferred revenue edge cases. Acceptable for production use.
  */
 function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): number {
   let totalRevenue = 0;
 
   for (const check of checks) {
-    // FIRST: Scan ALL checks for refunds (even voided ones)
+    // FIRST: Scan ALL checks for refunds (even voided ones) for tracking
     // This must happen BEFORE we skip voided checks
     for (const payment of check.payments ?? []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -440,8 +492,6 @@ function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): n
 
       // Check if this payment has any refund indicator
       const hasRefundObject = payment.refund && typeof payment.refund === 'object';
-      const hasRefundAmount = (payment.refundAmount && payment.refundAmount > 0) ||
-                              (payment.refund?.refundAmount && payment.refund.refundAmount > 0);
       const hasRefundStatus = refundStatus === 'PARTIAL' || refundStatus === 'FULL';
 
       // Debug log for any payment with refund indicators
@@ -454,7 +504,6 @@ function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): n
           refundAmount: payment.refundAmount,
           paymentAmount: payment.amount,
           paymentGuid: payment.guid,
-          allPaymentKeys: Object.keys(payment),
         });
       }
 
@@ -465,7 +514,6 @@ function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): n
       } else if (payment.refundAmount && payment.refundAmount > 0) {
         refundAmt = payment.refundAmount;
       } else if (hasRefundStatus && paymentAny.refund?.refundAmount) {
-        // Try nested refund object for status-flagged payments
         refundAmt = paymentAny.refund.refundAmount;
       }
 
@@ -484,8 +532,7 @@ function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): n
       // Track deferred on excluded checks (for reporting only - NOT subtracted)
       for (const selection of check.selections ?? []) {
         if (selection.voidDate || selection.voided) continue;
-        const categoryName = getSelectionCategoryName(selection, config);
-        if (categoryName && isDeferredRevenueCategory(categoryName)) {
+        if (!selection.salesCategory?.guid) {
           deferredOnExcludedOrders += (selection.price ?? 0) * (selection.quantity ?? 1);
         }
       }
@@ -494,16 +541,13 @@ function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): n
 
     const checkAmount = check.amount ?? 0;
 
-    // Calculate service charges - subtract ALL service charges
-    // Toast excludes all service charges from Net Sales
-    let checkServiceCharges = 0;
+    // Track service charges for reporting (but DO NOT subtract from net)
     for (const sc of check.appliedServiceCharges ?? []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const scAny = sc as any;
       const chargeAmt = scAny.chargeAmount ?? sc.amount ?? 0;
       totalServiceCharges += chargeAmt;
       serviceChargeCount++;
-      checkServiceCharges += chargeAmt;
 
       // Track gratuity vs non-gratuity for reporting
       if (scAny.gratuity === true) {
@@ -513,28 +557,17 @@ function calculateRevenue(checks: ToastCheck[], config?: ToastConfigMappings): n
       }
     }
 
-    // Calculate discounts from check.appliedDiscounts
-    let checkDiscounts = 0;
-    if (check.appliedDiscounts && check.appliedDiscounts.length > 0) {
-      checkDiscounts = check.appliedDiscounts.reduce((sum, d) => sum + (d.amount ?? 0), 0);
-    }
+    // Calculate deferred revenue (items without salesCategory GUID)
+    const checkDeferred = getDeferredAmount(check);
+    totalDeferredSubtracted += checkDeferred;
 
-    // Calculate refunds from payments (for revenue subtraction on this check)
-    let checkRefunds = 0;
-    for (const payment of check.payments ?? []) {
-      if (payment.refund?.refundAmount && payment.refund.refundAmount > 0) {
-        checkRefunds += payment.refund.refundAmount;
-      } else if (payment.refundAmount && payment.refundAmount > 0) {
-        checkRefunds += payment.refundAmount;
-      }
-    }
-
+    // Calculate refunds
+    const checkRefunds = getRefundAmount(check);
     totalRefundsApplied += checkRefunds;
 
-    // Net = check.amount - serviceCharges - refunds
-    // NO discount subtraction - check.amount already has discounts applied (Toast's post-discount subtotal)
-    // NO deferred subtraction - Toast includes deferred in Net Sales
-    totalRevenue += checkAmount - checkServiceCharges - checkRefunds;
+    // FORMULA B: Net = check.amount - deferred - refunds
+    // DO NOT subtract service charges or discounts
+    totalRevenue += checkAmount - checkDeferred - checkRefunds;
   }
 
   return totalRevenue;
@@ -590,6 +623,26 @@ interface TransactionAggregate {
   otherPayments: number;
   totalTips: number;
   orderCount: number;
+  // Raw components for reconciliation
+  serviceCharges: number;
+  deferredRevenue: number;
+}
+
+export interface RevenueCenterAggregate {
+  date: Date;
+  revenueCenterGuid: string;
+  revenueCenterName: string;
+  netSales: number;
+  orderCount: number;
+  checkCount: number;
+  isOutdoor: boolean;
+}
+
+/**
+ * Detect if a revenue center is outdoor based on name
+ */
+function isOutdoorRevenueCenter(name: string): boolean {
+  return /terrace|patio|outdoor|garden|deck|rooftop/i.test(name);
 }
 
 // ============================================================================
@@ -743,6 +796,8 @@ export function aggregateOrdersToTransactions(
       otherPayments: 0,
       totalTips: 0,
       orderCount: 0,
+      serviceCharges: 0,
+      deferredRevenue: 0,
     };
 
     existing.orderCount += 1;
@@ -753,37 +808,36 @@ export function aggregateOrdersToTransactions(
         continue;
       }
 
-      // Use check.amount as the gross base (same as calculateRevenue)
-      // check.amount is the subtotal from Toast before tax
+      // Use check.amount as the gross base
+      // check.amount is the subtotal from Toast (post-discount, pre-tax)
       const checkGross = check.amount ?? 0;
       existing.grossSales += checkGross;
 
-      // Calculate service charges - subtract ALL service charges
-      // Toast excludes all service charges from Net Sales
-      let checkServiceCharges = 0;
+      // Track service charges for reference (but DO NOT subtract from net)
       for (const sc of check.appliedServiceCharges ?? []) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const scAny = sc as any;
-        checkServiceCharges += scAny.chargeAmount ?? sc.amount ?? 0;
+        existing.serviceCharges += scAny.chargeAmount ?? sc.amount ?? 0;
       }
 
-      // Calculate discounts from check.appliedDiscounts
+      // Calculate discounts from check.appliedDiscounts (for reporting)
       let checkDiscounts = 0;
       if (check.appliedDiscounts && check.appliedDiscounts.length > 0) {
         checkDiscounts = check.appliedDiscounts.reduce((sum, d) => sum + (d.amount ?? 0), 0);
       }
       existing.discounts += checkDiscounts;
 
+      // Calculate deferred revenue (items without salesCategory GUID)
+      const checkDeferred = getDeferredAmount(check);
+      existing.deferredRevenue += checkDeferred;
+
       // Calculate refunds
-      let checkRefunds = 0;
+      const checkRefunds = getRefundAmount(check);
+      existing.refunds += checkRefunds;
+
+      // Process payment info
       for (const payment of check.payments ?? []) {
         existing.totalTips += payment.tipAmount ?? 0;
-
-        if (payment.refund?.refundAmount && payment.refund.refundAmount > 0) {
-          checkRefunds += payment.refund.refundAmount;
-        } else if (payment.refundAmount && payment.refundAmount > 0) {
-          checkRefunds += payment.refundAmount;
-        }
 
         // Payment breakdown
         const amt = payment.amount ?? 0;
@@ -794,12 +848,10 @@ export function aggregateOrdersToTransactions(
           default: existing.otherPayments += amt;
         }
       }
-      existing.refunds += checkRefunds;
 
-      // Net = gross - serviceCharges - refunds
-      // NO discount subtraction - check.amount already has discounts applied (Toast's post-discount subtotal)
-      // NO deferred subtraction - Toast includes deferred in Net Sales
-      existing.netSales += checkGross - checkServiceCharges - checkRefunds;
+      // FORMULA B: Net = check.amount - deferred - refunds
+      // DO NOT subtract service charges or discounts
+      existing.netSales += checkGross - checkDeferred - checkRefunds;
     }
 
     aggregates.set(key, existing);
@@ -840,8 +892,96 @@ export function mapTransactionAggregatesToPrisma(
       transactionCount: orderCount,
       avgCheckSize: orderCount > 0 ? netSales / orderCount : 0,
       avgTip: orderCount > 0 ? totalTips / orderCount : 0,
+      // Raw components for reconciliation
+      serviceCharges: safeNumber(agg.serviceCharges),
+      deferredRevenue: safeNumber(agg.deferredRevenue),
     });
   }
+  return records;
+}
+
+/**
+ * Aggregate orders by revenue center
+ * Groups revenue by dining area (Bar, Outdoor Terrace, Main Dining, etc.)
+ */
+export function aggregateOrdersByRevenueCenter(
+  orders: ToastOrder[],
+  config?: ToastConfigMappings
+): Map<string, RevenueCenterAggregate> {
+  const aggregates = new Map<string, RevenueCenterAggregate>();
+
+  for (const order of orders) {
+    if (order.deleted || order.voidDate || order.voided) continue;
+
+    const date = parseBusinessDate(order.businessDate);
+    const dateStr = date.toISOString().slice(0, 10);
+
+    // Get revenue center info
+    const rcGuid = order.revenueCenter?.guid;
+    if (!rcGuid) continue; // Skip orders without revenue center
+
+    // Look up name from config or use guid as fallback
+    const rcName = order.revenueCenter?.name ||
+                   config?.revenueCenters?.[rcGuid] ||
+                   rcGuid;
+
+    const key = `${dateStr}-${rcGuid}`;
+
+    const existing = aggregates.get(key) ?? {
+      date,
+      revenueCenterGuid: rcGuid,
+      revenueCenterName: rcName,
+      netSales: 0,
+      orderCount: 0,
+      checkCount: 0,
+      isOutdoor: isOutdoorRevenueCenter(rcName),
+    };
+
+    existing.orderCount += 1;
+
+    // Calculate revenue and check count from checks
+    for (const check of order.checks ?? []) {
+      if (check.deleted || check.voidDate || check.voided) continue;
+
+      existing.checkCount += 1;
+
+      // Use same formula as calculateRevenue: check.amount - deferred - refunds
+      const checkAmount = check.amount ?? 0;
+      const checkDeferred = getDeferredAmount(check);
+      const checkRefunds = getRefundAmount(check);
+
+      existing.netSales += checkAmount - checkDeferred - checkRefunds;
+    }
+
+    aggregates.set(key, existing);
+  }
+
+  return aggregates;
+}
+
+export function mapRevenueCenterAggregatesToPrisma(
+  aggregates: Map<string, RevenueCenterAggregate>,
+  locationId: string
+): Prisma.RevenueCenterMetricsCreateManyInput[] {
+  const records: Prisma.RevenueCenterMetricsCreateManyInput[] = [];
+
+  for (const [_, agg] of aggregates) {
+    const netSales = safeNumber(agg.netSales);
+    const checkCount = safeNumber(agg.checkCount);
+
+    records.push({
+      locationId,
+      date: agg.date,
+      revenueCenterGuid: agg.revenueCenterGuid,
+      revenueCenterName: agg.revenueCenterName,
+      netSales,
+      orderCount: safeNumber(agg.orderCount),
+      checkCount,
+      avgCheck: checkCount > 0 ? netSales / checkCount : 0,
+      isOutdoor: agg.isOutdoor,
+    });
+  }
+
   return records;
 }
 

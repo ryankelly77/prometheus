@@ -12,6 +12,8 @@ import {
   mapDaypartAggregatesToPrisma,
   aggregateOrdersToTransactions,
   mapTransactionAggregatesToPrisma,
+  aggregateOrdersByRevenueCenter,
+  mapRevenueCenterAggregatesToPrisma,
   resetDaypartDebugCounter,
   resetCategoryDebugCounter,
   resetExclusionCounters,
@@ -259,6 +261,45 @@ export async function syncToastData(
               });
               throw upsertError;
             }
+          }
+
+          // Aggregate and save revenue center metrics
+          const revenueCenterAggregates = aggregateOrdersByRevenueCenter(orders, configMappings);
+          const revenueCenterRecords = mapRevenueCenterAggregatesToPrisma(
+            revenueCenterAggregates,
+            primaryLocationId
+          );
+
+          if (revenueCenterRecords.length > 0) {
+            // Delete existing revenue center records for these dates before inserting
+            for (const dateStr of uniqueDates) {
+              const dateValue = new Date(dateStr + 'T00:00:00.000Z');
+              await prisma.revenueCenterMetrics.deleteMany({
+                where: {
+                  locationId: primaryLocationId,
+                  date: dateValue,
+                },
+              });
+            }
+
+            // Insert fresh revenue center metrics
+            console.log(`[Toast Sync] Inserting ${revenueCenterRecords.length} revenue center records...`);
+            let rcInsertCount = 0;
+            for (const record of revenueCenterRecords) {
+              try {
+                await prisma.revenueCenterMetrics.create({
+                  data: record,
+                });
+                rcInsertCount++;
+              } catch (rcError) {
+                console.error(`[Toast Sync] Failed to create revenue center metric:`, {
+                  revenueCenterName: record.revenueCenterName,
+                  date: record.date,
+                  error: rcError instanceof Error ? rcError.message : rcError,
+                });
+              }
+            }
+            console.log(`[Toast Sync] Inserted ${rcInsertCount} revenue center records`);
           }
 
           // ========== FINAL SYNC SUMMARY ==========
