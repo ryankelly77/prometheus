@@ -437,6 +437,61 @@ export function getHolidaysInRange(
   return allHolidays.filter((h) => h.date >= startDate && h.date <= endDate);
 }
 
+export interface ResolvedSAEvent {
+  name: string;
+  month: number;
+  impactLevel: "high" | "medium" | "low";
+  restaurantImpact: string;
+}
+
+/**
+ * Get SA recurring events that fall within a date range.
+ * Returns events for any month that overlaps with the range.
+ */
+export function getSAEventsInRange(
+  startDate: string,
+  endDate: string
+): ResolvedSAEvent[] {
+  const startMonth = parseInt(startDate.slice(5, 7));
+  const endMonth = parseInt(endDate.slice(5, 7));
+  const startYear = parseInt(startDate.slice(0, 4));
+  const endYear = parseInt(endDate.slice(0, 4));
+
+  // Build list of months in the range
+  const monthsInRange: number[] = [];
+  if (startYear === endYear) {
+    for (let m = startMonth; m <= endMonth; m++) {
+      monthsInRange.push(m);
+    }
+  } else {
+    // Spans multiple years
+    for (let m = startMonth; m <= 12; m++) {
+      monthsInRange.push(m);
+    }
+    for (let m = 1; m <= endMonth; m++) {
+      if (!monthsInRange.includes(m)) {
+        monthsInRange.push(m);
+      }
+    }
+  }
+
+  // Filter events that fall in these months
+  return SA_RECURRING_EVENTS.filter((event) => {
+    if (event.month) {
+      return monthsInRange.includes(event.month);
+    }
+    if (event.months) {
+      return event.months.some((m) => monthsInRange.includes(m));
+    }
+    return false;
+  }).map((event) => ({
+    name: event.name,
+    month: event.month || event.months?.[0] || 1,
+    impactLevel: event.impactLevel,
+    restaurantImpact: event.restaurantImpact,
+  }));
+}
+
 /**
  * Find the nearest holiday to a given date (within N days)
  */
