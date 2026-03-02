@@ -46,8 +46,8 @@ async function main() {
   if (location.latitude && location.longitude) {
     try {
       const forecast = await fetchForecast(location.latitude, location.longitude);
-      forecastText = `\n\n7-Day Forecast:\n${forecast.daily.map((d, i) =>
-        `${d.date}: High ${d.tempHigh}°F, Low ${d.tempLow}°F, ${d.description}${d.precipProbability > 30 ? ` (${d.precipProbability}% rain)` : ''}`
+      forecastText = `\n\n7-Day Forecast:\n${forecast.map((d) =>
+        `${d.date}: High ${d.tempHigh}°F, Low ${d.tempLow}°F, ${d.weatherDescription}${d.precipitationInches > 0.1 ? ` (${d.precipitationInches.toFixed(1)}" rain)` : ''}`
       ).join('\n')}`;
     } catch (e) {
       console.log("Could not fetch forecast:", e);
@@ -172,7 +172,7 @@ CONTENT:
         periodType: "MONTHLY",
         periodStart,
         periodEnd,
-        inputData: { source: "weather_correlation", outdoorImpact: correlation.outdoorImpact },
+        inputData: { source: "weather_correlation", hasOutdoorImpact: !!correlation.outdoorImpact },
         generatedAt: new Date(),
       },
     });

@@ -110,6 +110,12 @@ interface IntegrationStatus {
   lastSyncAt?: string
 }
 
+interface WeatherStatus {
+  enabled: boolean
+  hasCoordinates: boolean
+  weatherDays?: number
+}
+
 const RESTAURANT_TYPES = [
   { value: 'fine_dining', label: 'Fine Dining' },
   { value: 'casual_dining', label: 'Casual Dining' },
@@ -142,6 +148,7 @@ export default function IntelligenceProfilePage() {
   const [profile, setProfile] = useState<RestaurantProfile | null>(null)
   const [descriptorCategories, setDescriptorCategories] = useState<DescriptorCategory[]>([])
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([])
+  const [weatherStatus, setWeatherStatus] = useState<WeatherStatus | null>(null)
   const [feedbackRecords, setFeedbackRecords] = useState<FeedbackRecord[]>([])
   const [feedbackStats, setFeedbackStats] = useState({ helpful: 0, notHelpful: 0, incorrect: 0 })
 
@@ -229,6 +236,17 @@ export default function IntelligenceProfilePage() {
           status: int.status,
           lastSyncAt: int.lastSyncAt,
         })))
+      }
+
+      // Fetch weather status
+      const weatherRes = await fetch(`/api/weather/enable?locationId=${locationId}`)
+      if (weatherRes.ok) {
+        const weatherData = await weatherRes.json()
+        setWeatherStatus({
+          enabled: weatherData.enabled,
+          hasCoordinates: weatherData.hasCoordinates,
+          weatherDays: weatherData.weatherDays,
+        })
       }
 
       // Fetch feedback
@@ -789,22 +807,42 @@ export default function IntelligenceProfilePage() {
           )}
 
           {/* Weather */}
-          <div className="flex items-center justify-between p-3 rounded-lg border">
-            <div className="flex items-center gap-3">
-              <Circle className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="font-medium text-sm">Weather</p>
-                <p className="text-xs text-muted-foreground">Not enabled</p>
+          {weatherStatus?.enabled ? (
+            <div className="flex items-center justify-between p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <div>
+                  <p className="font-medium text-sm">Weather</p>
+                  <p className="text-xs text-muted-foreground">
+                    {weatherStatus.weatherDays || 0} days of weather data
+                  </p>
+                </div>
               </div>
+              <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard/insights')}>
+                View Insights
+                <ExternalLink className="h-3 w-3 ml-1" />
+              </Button>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => toast({ title: 'Coming Soon', description: 'Weather intelligence will be available soon.' })}
-            >
-              Enable
-            </Button>
-          </div>
+          ) : (
+            <div className="flex items-center justify-between p-3 rounded-lg border">
+              <div className="flex items-center gap-3">
+                <Circle className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="font-medium text-sm">Weather</p>
+                  <p className="text-xs text-muted-foreground">
+                    {weatherStatus?.hasCoordinates === false ? 'Location coordinates needed' : 'Not enabled'}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push('/dashboard/insights')}
+              >
+                Enable
+              </Button>
+            </div>
+          )}
 
           {/* Coming Soon Sources */}
           {[
