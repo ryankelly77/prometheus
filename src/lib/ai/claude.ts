@@ -14,6 +14,10 @@ import {
   getHedgeInstructions,
   type IntelligenceConfidence,
 } from "@/lib/intelligence/confidence";
+import {
+  aggregateStaticEvents,
+  type NormalizedEvent,
+} from "@/lib/events/aggregator";
 import { AI_RULES } from "./prompts";
 
 // Initialize the client (uses ANTHROPIC_API_KEY env var by default)
@@ -168,6 +172,17 @@ export interface WeatherFacts {
   analyzedAt: string;
 }
 
+export interface LocalEventFact {
+  name: string;
+  date: string;
+  category: string;
+  source: string;
+  impactLevel: "high" | "medium" | "low";
+  impactNote: string;
+  venue?: string;
+  distanceMiles?: number;
+}
+
 export interface DataFacts {
   avgMonthlyRevenue?: number;
   avgDailyRevenue?: number;
@@ -183,6 +198,7 @@ export interface DataFacts {
   monthOverMonthGrowth?: number;
   seasonalPeak?: string;
   weather?: WeatherFacts;
+  events?: LocalEventFact[];
 }
 
 export interface RestaurantProfile {
@@ -552,6 +568,33 @@ export async function calculateDataFacts(locationId: string): Promise<DataFacts>
     console.log("[DataFacts] Weather analysis skipped:", weatherError instanceof Error ? weatherError.message : "Unknown error");
   }
 
+  // Aggregate local events for the analysis period + upcoming 2 weeks
+  let events: LocalEventFact[] = [];
+  try {
+    const analysisStartDate = sevenMonthsAgo.toISOString().split("T")[0];
+    const today = new Date();
+    const twoWeeksOut = new Date(today);
+    twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
+    const analysisEndDate = twoWeeksOut.toISOString().split("T")[0];
+
+    // Use static events (instant, no API call needed for AI prompt)
+    const allEvents = aggregateStaticEvents(analysisStartDate, analysisEndDate);
+
+    // Convert to LocalEventFact format
+    events = allEvents.map((e: NormalizedEvent) => ({
+      name: e.name,
+      date: e.date,
+      category: e.category,
+      source: e.source,
+      impactLevel: e.impactLevel,
+      impactNote: e.impactNote,
+      venue: e.venue,
+      distanceMiles: e.distanceMiles,
+    }));
+  } catch (eventsError) {
+    console.log("[DataFacts] Events aggregation skipped:", eventsError instanceof Error ? eventsError.message : "Unknown error");
+  }
+
   return {
     avgMonthlyRevenue: Math.round(avgMonthlyRevenue),
     avgDailyRevenue: Math.round(avgDailyRevenue),
@@ -567,6 +610,7 @@ export async function calculateDataFacts(locationId: string): Promise<DataFacts>
     monthOverMonthGrowth: Math.round(monthOverMonthGrowth * 10) / 10,
     seasonalPeak,
     weather,
+    events,
   };
 }
 
@@ -846,6 +890,48 @@ function buildUserPrompt(
       parts.push("- Use the forecast to predict impact on upcoming days");
       parts.push("- Compare weather-adjusted performance (how did they do GIVEN the weather) vs raw performance");
       parts.push("");
+    }
+
+    // == LOCAL EVENTS ==
+    if (dataFacts.events && dataFacts.events.length > 0) {
+      const today = new Date().toISOString().split("T")[0];
+      const twoWeeksOut = new Date();
+      twoWeeksOut.setDate(twoWeeksOut.getDate() + 14);
+      const twoWeeksOutStr = twoWeeksOut.toISOString().split("T")[0];
+
+      // Split events into past high-impact and upcoming
+      const highImpactEvents = dataFacts.events.filter(
+        (e) => e.impactLevel === "high" && e.date < today
+      );
+      const upcomingEvents = dataFacts.events.filter(
+        (e) => e.date >= today && e.date <= twoWeeksOutStr
+      );
+
+      if (highImpactEvents.length > 0 || upcomingEvents.length > 0) {
+        parts.push("== LOCAL EVENTS ==");
+
+        if (highImpactEvents.length > 0) {
+          parts.push("HIGH-IMPACT EVENTS IN ANALYSIS PERIOD:");
+          for (const e of highImpactEvents.slice(0, 10)) {
+            parts.push(`- ${e.date}: ${e.name} [${e.category}/${e.impactLevel}] ${e.impactNote}`);
+          }
+          parts.push("");
+        }
+
+        if (upcomingEvents.length > 0) {
+          parts.push("UPCOMING EVENTS (next 2 weeks):");
+          for (const e of upcomingEvents.slice(0, 10)) {
+            parts.push(`- ${e.date}: ${e.name} [${e.impactLevel}] ${e.impactNote}`);
+          }
+          parts.push("");
+        }
+
+        parts.push("IMPORTANT: Check events BEFORE attributing sales anomalies to weather.");
+        parts.push("A spike on Valentine's Day is holiday demand, not good weather.");
+        parts.push("A spike near an Alamodome concert is event traffic, not a random surge.");
+        parts.push("Holiday/event explanations take priority over weather explanations.");
+        parts.push("");
+      }
     }
   }
 
