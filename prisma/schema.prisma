@@ -588,10 +588,12 @@ model LocalEvent {
   popularityScore    Float?
   impactScore        Int?
   impactLevel        EventImpact?
+  impactNote         String?       @db.Text  // Restaurant-specific impact note for AI context
   source             EventSource
   externalId         String?
   externalUrl        String?
   fingerprint        String?
+  rawData            Json?         // Original API response (for SeatGeek events)
   isManual           Boolean       @default(false)
   enteredById        String?
   createdAt          DateTime      @default(now())
@@ -1271,6 +1273,9 @@ enum EventSource {
   EVENTBRITE
   SYSTEM
   MANUAL
+  US_HOLIDAYS      // from /src/lib/data/holidays.ts
+  SA_RECURRING     // SA local recurring events (Fiesta, Rodeo, etc.)
+  SCHOOL_CALENDAR  // from /src/lib/data/school-calendar.ts
 }
 
 enum EventImpact {
